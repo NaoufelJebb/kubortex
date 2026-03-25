@@ -18,6 +18,7 @@ dependencies = [
     "prometheus-client>=0.21,<1",
     "slack-sdk>=3.34,<4",
     "structlog>=24.4,<26",
+    "croniter>=6,<7",
 ]
 
 [project.optional-dependencies]
