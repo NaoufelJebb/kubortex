@@ -1,0 +1,17 @@
+apiVersion: v2
+name: kubortex
+description: Autonomous SRE platform for Kubernetes — alert ingestion, LLM-driven investigation, and policy-gated remediation.
+type: application
+version: 0.4.0-alpha
+appVersion: "0.4.0-alpha"
+keywords:
+  - sre
+  - kubernetes
+  - autonomous
+  - remediation
+  - langgraph
+home: https://github.com/your-org/kubortex
+sources:
+  - https://github.com/your-org/kubortex
+maintainers:
+  - name: Kubortex maintainers

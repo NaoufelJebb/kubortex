@@ -1,0 +1,211 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: autonomyprofiles.kubortex.io
+spec:
+  group: kubortex.io
+  names:
+    kind: AutonomyProfile
+    listKind: AutonomyProfileList
+    plural: autonomyprofiles
+    singular: autonomyprofile
+    shortNames: [ap]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Policy profile that controls autonomous remediation behavior.
+          properties:
+            spec:
+              type: object
+              description: Desired autonomy rules, budgets, and safeguards.
+              properties:
+                scope:
+                  type: object
+                  description: Incident scope to which this profile applies.
+                  properties:
+                    namespaces:
+                      type: object
+                      description: Namespace selectors for profile matching.
+                      properties:
+                        matchNames:
+                          type: array
+                          description: Namespaces explicitly included in scope.
+                          items:
+                            type: string
+                            description: Namespace name to match.
+                        matchLabels:
+                          type: object
+                          description: Namespace labels that must match.
+                          additionalProperties:
+                            type: string
+                            description: Required label value.
+                    categories:
+                      type: array
+                      description: Incident categories covered by the profile.
+                      items:
+                        type: string
+                        description: Incident category name.
+                    severities:
+                      type: array
+                      description: Incident severities covered by the profile.
+                      items:
+                        type: string
+                        description: Incident severity value.
+                autonomyRules:
+                  type: array
+                  description: Action rules that govern what the operator may execute autonomously.
+                  items:
+                    type: object
+                    description: Rule that permits or gates a set of action types.
+                    properties:
+                      actions:
+                        type: array
+                        description: Action types permitted by this rule.
+                        items:
+                          type: string
+                          description: Action type name.
+                      maxSeverity:
+                        type: string
+                        description: Highest severity this rule applies to (inclusive).
+                        enum: [info, warning, high, critical]
+                      approval:
+                        type: string
+                        description: Approval level required before execution.
+                        enum: [none, team-lead, sre-manager, security-team, required]
+                budgets:
+                  type: object
+                  description: Hard limits that cap automated remediation activity.
+                  properties:
+                    maxConcurrentRemediations:
+                      type: integer
+                      description: Maximum number of remediations running at the same time.
+                    maxPodsKilledPerHour:
+                      type: integer
+                      description: Maximum pod restarts allowed per hour.
+                    maxRollbacksPerDay:
+                      type: integer
+                      description: Maximum deployment rollbacks allowed per day.
+                    maxScaleUpsPerHour:
+                      type: integer
+                      description: Maximum scale-up actions allowed per hour.
+                cooldown:
+                  type: object
+                  description: Minimum wait periods between automated actions.
+                  properties:
+                    afterRemediationSeconds:
+                      type: integer
+                      description: Cooldown after a successful remediation.
+                    afterFailedSeconds:
+                      type: integer
+                      description: Cooldown after a failed remediation.
+                escalationDeadlineMinutes:
+                  type: integer
+                  description: Minutes before an uninvestigated incident is escalated.
+                maxInvestigationRetries:
+                  type: integer
+                  description: Maximum investigation retry attempts before escalation.
+                blackoutWindows:
+                  type: array
+                  description: Scheduled windows during which automation is paused.
+                  items:
+                    type: object
+                    description: Single blackout window definition.
+                    properties:
+                      name:
+                        type: string
+                        description: Human-readable blackout window name.
+                      cron:
+                        type: string
+                        description: Cron expression that starts the window.
+                      durationMinutes:
+                        type: integer
+                        description: Window duration in minutes.
+                    required: [name, cron, durationMinutes]
+                confidenceThresholds:
+                  type: object
+                  description: Confidence cutoffs for automated decisions.
+                  properties:
+                    autoRemediate:
+                      type: number
+                      description: Minimum confidence for fully autonomous execution.
+                    propose:
+                      type: number
+                      description: Minimum confidence to propose remediation (below → escalate).
+                    escalate:
+                      type: number
+                      description: Minimum confidence before escalation is triggered.
+                verification:
+                  type: object
+                  description: Post-action verification behavior.
+                  properties:
+                    enabled:
+                      type: boolean
+                      description: Enables outcome verification after action execution.
+                    waitAfterActionSeconds:
+                      type: integer
+                      description: Seconds to wait before evaluating verification metrics.
+                    rollbackOnRegression:
+                      type: boolean
+                      description: Automatically roll back if verification detects regression.
+                    successCriteria:
+                      type: object
+                      description: Metric name → minimum required value for success.
+                      additionalProperties:
+                        type: number
+                        description: Required metric value.
+            status:
+              type: object
+              description: Current activation state and budget consumption.
+              properties:
+                phase:
+                  type: string
+                  description: Whether the profile is active or suspended.
+                  enum: [Active, Suspended]
+                budgetUsage:
+                  type: object
+                  description: Tracked usage against configured action budgets.
+                  properties:
+                    podsKilledThisHour:
+                      type: integer
+                      description: Pod restarts executed this hour.
+                    rollbacksToday:
+                      type: integer
+                      description: Rollbacks executed today.
+                    scaleUpsThisHour:
+                      type: integer
+                      description: Scale-ups executed this hour.
+                    activeRemediations:
+                      type: integer
+                      description: Number of remediations currently in progress.
+                    lastResetHour:
+                      type: string
+                      description: Time the hourly counters were last reset.
+                      format: date-time
+                    lastResetDay:
+                      type: string
+                      description: Time the daily counters were last reset.
+                      format: date-time
+                conditions:
+                  type: array
+                  description: Standard Kubernetes condition list for the profile.
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+                lastValidated:
+                  type: string
+                  description: Time the profile was last validated by the controller.
+                  format: date-time
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

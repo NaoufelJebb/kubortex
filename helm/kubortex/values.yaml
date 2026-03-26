@@ -1,0 +1,151 @@
+# Default values for kubortex.
+# Override with: helm install kubortex ./helm/kubortex -f my-values.yaml
+
+# -- Per-component images.  Each component has its own minimal image.
+# Set the repository to your registry path; tag defaults to "latest".
+# Override a specific component with e.g. --set images.investigator.tag=v1.2
+images:
+  operator:
+    repository: kubortex-operator
+    tag: latest
+    pullPolicy: IfNotPresent
+  edge:
+    repository: kubortex-edge
+    tag: local
+    pullPolicy: IfNotPresent
+  investigator:
+    repository: kubortex-investigator
+    tag: latest
+    pullPolicy: IfNotPresent
+  remediator:
+    repository: kubortex-remediator
+    tag: latest
+    pullPolicy: IfNotPresent
+
+# -- Per-component enablement
+components:
+  operator: true
+  edge: true
+  investigator: true
+  remediator: true
+
+# -- Number of replicas for each component
+replicaCount:
+  operator: 2
+  edge: 2
+  investigator: 2
+  remediator: 2
+
+# -- Resource requests/limits per component
+resources:
+  operator:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  edge:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  investigator:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  remediator:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# -- Edge webhook service
+service:
+  type: ClusterIP
+  port: 8000
+
+# -- Edge runtime settings
+edge:
+  host: 0.0.0.0
+  port: 8080
+  correlationWindowSeconds: 300
+
+# -- LLM configuration
+llm:
+  provider: openai
+  model: gpt-4o
+  # apiKey is written to a Secret unless existingSecret is set
+  apiKey: ""
+  # Name of an existing Secret with KUBORTEX_LLM_API_KEY and KUBORTEX_LLM_MODEL keys
+  existingSecret: ""
+  timeoutSeconds: 120
+  maxTokens: 4096
+
+# -- Slack notifications
+slack:
+  botToken: ""
+  channel: "#sre-oncall"
+  escalationChannel: "#sre-escalations"
+  # Name of an existing Secret with KUBORTEX_SLACK_BOT_TOKEN, KUBORTEX_SLACK_CHANNEL,
+  # and KUBORTEX_SLACK_ESCALATION_CHANNEL keys
+  existingSecret: ""
+
+# -- Observability backends
+prometheus:
+  url: http://prometheus.monitoring:9090
+
+loki:
+  url: http://loki.monitoring:3100
+
+# -- Kubortex runtime tuning
+kubortex:
+  investigatorMaxIterations: 10
+  investigatorTimeoutSeconds: 300
+  contextMaxChars: 120000
+  learningMinSamples: 5
+  learningDecayAlpha: 0.3
+
+# -- Persistent storage for investigator
+persistence:
+  payloads:
+    size: 5Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteMany
+  learning:
+    size: 1Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteMany
+  checkpoints:
+    size: 2Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteMany
+
+# -- NetworkPolicy (set enabled: false if your CNI does not support it)
+networkPolicy:
+  enabled: true
+
+# -- Pod-level extra labels applied to all component pods
+podLabels: {}
+
+# -- Pod-level annotations applied to all component pods
+podAnnotations: {}
+
+# -- Node selector applied to all pods
+nodeSelector: {}
+
+# -- Tolerations applied to all pods
+tolerations: []
+
+# -- Affinity rules applied to all pods
+affinity: {}

@@ -1,0 +1,126 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: incidents.kubortex.io
+spec:
+  group: kubortex.io
+  names:
+    kind: Incident
+    listKind: IncidentList
+    plural: incidents
+    singular: incident
+    shortNames: [inc]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Canonical incident record created from correlated signals.
+          properties:
+            spec:
+              type: object
+              description: Desired incident summary, classification, and signal set.
+              properties:
+                summary:
+                  type: string
+                  description: Human-readable summary of the incident.
+                category:
+                  type: string
+                  description: Classified incident category.
+                  enum: [error-rate, latency, availability, resource-saturation, deployment, security, capacity, custom]
+                severity:
+                  type: string
+                  description: Incident severity used for prioritization.
+                  enum: [info, warning, high, critical]
+                targetRef:
+                  type: object
+                  description: Kubernetes object primarily affected by the incident.
+                  properties:
+                    kind:
+                      type: string
+                      description: Kind of the affected resource.
+                    namespace:
+                      type: string
+                      description: Namespace of the affected resource, when namespaced.
+                    name:
+                      type: string
+                      description: Name of the affected resource.
+                source:
+                  type: string
+                  description: System that originated the incident (e.g. alertmanager).
+                signals:
+                  type: array
+                  description: Correlated raw signals that make up the incident.
+                  items:
+                    type: object
+                    description: Raw signal payload captured for the incident.
+                    x-kubernetes-preserve-unknown-fields: true
+                labels:
+                  type: object
+                  description: Labels copied onto the incident for filtering and routing.
+                  additionalProperties:
+                    type: string
+                    description: Label value.
+              required: [summary, category, severity, targetRef]
+            status:
+              type: object
+              description: Observed incident lifecycle and controller state.
+              properties:
+                phase:
+                  type: string
+                  description: Current lifecycle phase of the incident.
+                  enum: [Detected, Investigating, RemediationPlanned, PendingApproval, Executing, Resolved, Escalated, Failed, Suppressed]
+                autonomyProfile:
+                  type: string
+                  description: Name of the AutonomyProfile matched to this incident.
+                investigationRef:
+                  type: string
+                  description: Name of the Investigation CR created for this incident.
+                remediationPlanRef:
+                  type: string
+                  description: Name of the RemediationPlan CR created for this incident.
+                escalationDeadline:
+                  type: string
+                  description: RFC3339 time by which the incident must be resolved before escalation.
+                  format: date-time
+                retryCount:
+                  type: integer
+                  description: Number of investigation + remediation cycles attempted so far.
+                maxRetries:
+                  type: integer
+                  description: Maximum number of retry cycles allowed before escalation.
+                investigation:
+                  type: object
+                  description: Synopsis of the latest completed investigation.
+                  x-kubernetes-preserve-unknown-fields: true
+                timeline:
+                  type: array
+                  description: Ordered log of phase transitions and notable events.
+                  items:
+                    type: object
+                    description: Single timeline entry.
+                    x-kubernetes-preserve-unknown-fields: true
+                conditions:
+                  type: array
+                  description: Standard Kubernetes status conditions.
+                  items:
+                    type: object
+                    x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Category
+          type: string
+          jsonPath: .spec.category
+        - name: Severity
+          type: string
+          jsonPath: .spec.severity
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

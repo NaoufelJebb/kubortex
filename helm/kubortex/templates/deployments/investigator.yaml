@@ -1,0 +1,71 @@
+{{- if .Values.components.investigator }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kubortex.fullname" . }}-investigator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubortex.componentLabels" (list . "investigator") | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount.investigator }}
+  selector:
+    matchLabels:
+      {{- include "kubortex.selectorLabels" (list . "investigator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kubortex.selectorLabels" (list . "investigator") | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: kubortex-investigator
+      containers:
+        - name: investigator
+          image: "{{ .Values.images.investigator.repository }}:{{ .Values.images.investigator.tag }}"
+          imagePullPolicy: {{ .Values.images.investigator.pullPolicy }}
+          env:
+            {{- include "kubortex.commonEnv" . | nindent 12 }}
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          envFrom:
+            - secretRef:
+                name: {{ include "kubortex.llmSecretName" . }}
+          volumeMounts:
+            - name: payloads
+              mountPath: /data/payloads
+            - name: learning
+              mountPath: /data/learning
+            - name: checkpoints
+              mountPath: /data/checkpoints
+          resources:
+            {{- toYaml .Values.resources.investigator | nindent 12 }}
+      volumes:
+        - name: payloads
+          persistentVolumeClaim:
+            claimName: {{ include "kubortex.fullname" . }}-payloads
+        - name: learning
+          persistentVolumeClaim:
+            claimName: {{ include "kubortex.fullname" . }}-learning
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: {{ include "kubortex.fullname" . }}-checkpoints
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

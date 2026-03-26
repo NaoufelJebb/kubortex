@@ -1,0 +1,47 @@
+{{- if .Values.components.investigator }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubortex-investigator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubortex.componentLabels" (list . "investigator") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kubortex.fullname" . }}-investigator
+  labels:
+    {{- include "kubortex.componentLabels" (list . "investigator") | nindent 4 }}
+rules:
+  - apiGroups: [kubortex.io]
+    resources: [investigations]
+    verbs: [get, list, watch]
+  - apiGroups: [kubortex.io]
+    resources: [investigations/status]
+    verbs: [get, patch, update]
+  - apiGroups: [kubortex.io]
+    resources: [incidents]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods, events, nodes, services, configmaps, namespaces]
+    verbs: [get, list]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kubortex.fullname" . }}-investigator
+  labels:
+    {{- include "kubortex.componentLabels" (list . "investigator") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kubortex.fullname" . }}-investigator
+subjects:
+  - kind: ServiceAccount
+    name: kubortex-investigator
+    namespace: {{ .Release.Namespace }}
+{{- end }}

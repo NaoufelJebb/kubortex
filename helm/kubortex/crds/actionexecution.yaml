@@ -1,0 +1,137 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: actionexecutions.kubortex.io
+spec:
+  group: kubortex.io
+  names:
+    kind: ActionExecution
+    listKind: ActionExecutionList
+    plural: actionexecutions
+    singular: actionexecution
+    shortNames: [ae]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Execution record for an approved remediation action.
+          properties:
+            spec:
+              type: object
+              description: Desired remediation action and approval context.
+              properties:
+                incidentRef:
+                  type: string
+                  description: Name of the Incident that triggered this execution.
+                remediationPlanRef:
+                  type: string
+                  description: Name of the RemediationPlan that proposed this action.
+                action:
+                  type: object
+                  description: Action to execute against a Kubernetes target.
+                  properties:
+                    type:
+                      type: string
+                      description: Remediation action type.
+                      enum: [restart-pod, scale-up, rollback-deployment, cordon-node, drain-node]
+                    target:
+                      type: object
+                      description: Kubernetes object targeted by the action.
+                      properties:
+                        kind:
+                          type: string
+                          description: Kind of the target resource.
+                        namespace:
+                          type: string
+                          description: Namespace of the target resource, when namespaced.
+                        name:
+                          type: string
+                          description: Name of the target resource.
+                    parameters:
+                      type: object
+                      description: Action-specific execution parameters.
+                      x-kubernetes-preserve-unknown-fields: true
+                    rationale:
+                      type: string
+                      description: Reason this action was selected.
+                  required: [type, target]
+                approval:
+                  type: object
+                  description: Approval decision attached to the execution.
+                  properties:
+                    level:
+                      type: string
+                      description: Approval level required for the action.
+                    approvalRequestRef:
+                      type: object
+                      description: ApprovalRequest that captured the decision.
+                      properties:
+                        name:
+                          type: string
+                          description: Name of the referenced ApprovalRequest.
+                        namespace:
+                          type: string
+                          description: Namespace of the referenced ApprovalRequest.
+                    decidedBy:
+                      type: string
+                      description: Identity that approved or rejected the action.
+                    decidedAt:
+                      type: string
+                      description: Time the approval decision was recorded.
+                      format: date-time
+                approvalRequestRef:
+                  type: string
+                  description: Name of the ApprovalRequest that authorized this execution.
+                retryBudget:
+                  type: integer
+                  description: Maximum number of retry attempts allowed.
+              required: [incidentRef, action]
+            status:
+              type: object
+              description: Observed execution progress and outcome.
+              properties:
+                phase:
+                  type: string
+                  description: Current lifecycle phase of the execution.
+                  enum: [Approved, Executing, Succeeded, Failed, RolledBack]
+                claimedBy:
+                  type: string
+                  description: Controller instance currently handling the execution.
+                claimedAt:
+                  type: string
+                  description: Time the execution was claimed for processing.
+                  format: date-time
+                result:
+                  type: object
+                  description: Raw result returned by the executed action.
+                  x-kubernetes-preserve-unknown-fields: true
+                verification:
+                  type: object
+                  description: Verification outcome collected after execution.
+                  x-kubernetes-preserve-unknown-fields: true
+                rollback:
+                  type: object
+                  description: Rollback details recorded after a reversal.
+                  x-kubernetes-preserve-unknown-fields: true
+                error:
+                  type: string
+                  description: Error message when execution fails.
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Action
+          type: string
+          jsonPath: .spec.action.type
+        - name: ClaimedBy
+          type: string
+          jsonPath: .status.claimedBy
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

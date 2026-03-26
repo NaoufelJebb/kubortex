@@ -1,0 +1,47 @@
+{{- if .Values.components.operator }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kubortex-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubortex.componentLabels" (list . "operator") | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kubortex.fullname" . }}-operator
+  labels:
+    {{- include "kubortex.componentLabels" (list . "operator") | nindent 4 }}
+rules:
+  - apiGroups: [kubortex.io]
+    resources: ["*"]
+    verbs: ["*"]
+  - apiGroups: [kubortex.io]
+    resources: ["*/status"]
+    verbs: [get, patch, update]
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kubortex.fullname" . }}-operator
+  labels:
+    {{- include "kubortex.componentLabels" (list . "operator") | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kubortex.fullname" . }}-operator
+subjects:
+  - kind: ServiceAccount
+    name: kubortex-operator
+    namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -1,0 +1,39 @@
+Kubortex {{ .Chart.AppVersion }} deployed to namespace {{ .Release.Namespace }}.
+
+Components:
+{{- if .Values.components.operator }}
+  Operator     {{ .Values.replicaCount.operator }} replica(s)
+{{- end }}
+{{- if .Values.components.edge }}
+  Edge         {{ .Values.replicaCount.edge }} replica(s)   →  http://{{ include "kubortex.fullname" . }}-edge:{{ .Values.service.port }}/api/v1/alerts
+{{- end }}
+{{- if .Values.components.investigator }}
+  Investigator {{ .Values.replicaCount.investigator }} replica(s)
+{{- end }}
+{{- if .Values.components.remediator }}
+  Remediator   {{ .Values.replicaCount.remediator }} replica(s)
+{{- end }}
+
+Check pod status:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+Tail operator logs:
+  kubectl -n {{ .Release.Namespace }} logs -l app.kubernetes.io/component=operator -f
+
+Send a test alert to the edge webhook:
+{{- if .Values.components.edge }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "kubortex.fullname" . }}-edge 8000:{{ .Values.service.port }}
+  curl -X POST http://localhost:8000/api/v1/alerts \
+    -H 'Content-Type: application/json' \
+    -d '{"alerts":[{"status":"firing","labels":{"alertname":"SecurityViolation","severity":"warning","namespace":"default","deployment":"my-app"},"annotations":{"summary":"Security rule violated"},"startsAt":"2026-03-28T10:00:00Z"}]}'
+{{- end }}
+
+Watch the incident lifecycle:
+  kubectl -n {{ .Release.Namespace }} get incidents,investigations,actionexecutions -w
+{{- if not .Values.llm.existingSecret }}
+{{- if not .Values.llm.apiKey }}
+
+WARNING: llm.apiKey is not set. The investigator will not function without a valid LLM API key.
+Set it with: --set llm.apiKey=<your-key>
+{{- end }}
+{{- end }}

@@ -5,24 +5,46 @@ description = "Autonomous SRE platform for Kubernetes"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "kopf>=1.37,<2",
-    "fastapi>=0.115,<1",
-    "uvicorn[standard]>=0.34,<1",
-    "langgraph>=0.3,<1",
-    "langchain>=0.3,<1",
-    "langchain-openai>=0.3,<1",
+    # Shared by all components
     "kubernetes-asyncio>=31,<33",
-    "httpx>=0.28,<1",
     "pydantic>=2.10,<3",
     "pydantic-settings>=2.7,<3",
     "prometheus-client>=0.21,<1",
-    "slack-sdk>=3.34,<4",
     "structlog>=24.4,<26",
-    "croniter>=6,<7",
     "pyyaml>=6,<7",
 ]
 
 [project.optional-dependencies]
+# Per-component dependency groups — used by Docker build targets
+operator = [
+    "kopf>=1.37,<2",
+    "croniter>=6,<7",
+]
+edge = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.34,<1",
+    "httpx>=0.28,<1",
+    "slack-sdk>=3.34,<4",
+]
+investigator = [
+    "langgraph>=0.3,<1",
+    "langchain>=0.3,<1",
+    "langchain-openai>=0.3,<1",
+    "httpx>=0.28,<1",
+]
+remediator = []
+# Full install: all components (local dev, CI)
+all = [
+    "kopf>=1.37,<2",
+    "croniter>=6,<7",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.34,<1",
+    "httpx>=0.28,<1",
+    "slack-sdk>=3.34,<4",
+    "langgraph>=0.3,<1",
+    "langchain>=0.3,<1",
+    "langchain-openai>=0.3,<1",
+]
 dev = [
     "ruff>=0.9,<1",
     "pytest>=8,<9",

@@ -1,0 +1,52 @@
+{{- if .Values.components.investigator }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kubortex.fullname" . }}-payloads
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubortex.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.payloads.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.payloads.size }}
+  {{- if .Values.persistence.payloads.storageClass }}
+  storageClassName: {{ .Values.persistence.payloads.storageClass | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kubortex.fullname" . }}-learning
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubortex.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.learning.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.learning.size }}
+  {{- if .Values.persistence.learning.storageClass }}
+  storageClassName: {{ .Values.persistence.learning.storageClass | quote }}
+  {{- end }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kubortex.fullname" . }}-checkpoints
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubortex.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.checkpoints.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.checkpoints.size }}
+  {{- if .Values.persistence.checkpoints.storageClass }}
+  storageClassName: {{ .Values.persistence.checkpoints.storageClass | quote }}
+  {{- end }}
+{{- end }}

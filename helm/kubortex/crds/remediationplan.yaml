@@ -1,0 +1,102 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: remediationplans.kubortex.io
+spec:
+  group: kubortex.io
+  names:
+    kind: RemediationPlan
+    listKind: RemediationPlanList
+    plural: remediationplans
+    singular: remediationplan
+    shortNames: [rp]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Proposed remediation plan for an investigated incident.
+          properties:
+            spec:
+              type: object
+              description: Desired remediation actions and supporting confidence.
+              properties:
+                incidentRef:
+                  type: string
+                  description: Name of the Incident this plan intends to remediate.
+                investigationRef:
+                  type: string
+                  description: Name of the Investigation that produced this plan.
+                actions:
+                  type: array
+                  description: Ordered remediation actions proposed for the incident.
+                  items:
+                    type: object
+                    description: Single remediation step in the plan.
+                    properties:
+                      id:
+                        type: string
+                        description: Unique identifier for the action within this plan.
+                      type:
+                        type: string
+                        description: Remediation action type.
+                        enum: [restart-pod, scale-up, rollback-deployment, cordon-node, drain-node]
+                      target:
+                        type: object
+                        description: Kubernetes object targeted by the action.
+                        properties:
+                          kind:
+                            type: string
+                            description: Kind of the target resource.
+                          namespace:
+                            type: string
+                            description: Namespace of the target resource, when namespaced.
+                          name:
+                            type: string
+                            description: Name of the target resource.
+                      parameters:
+                        type: object
+                        description: Action-specific parameters for execution.
+                        x-kubernetes-preserve-unknown-fields: true
+                      rationale:
+                        type: string
+                        description: Reason the action is recommended.
+                      riskTier:
+                        type: string
+                        description: Estimated risk level of the action.
+                        enum: [low, medium, high, critical]
+                    required: [type, target]
+                confidence:
+                  type: number
+                  description: Confidence score assigned to the overall plan.
+              required: [incidentRef, investigationRef, actions]
+            status:
+              type: object
+              description: Observed plan state and policy evaluation results.
+              properties:
+                phase:
+                  type: string
+                  description: Current lifecycle phase of the remediation plan.
+                  enum: [Pending, PendingApproval, Approved, Executing, Completed, Failed, Rejected]
+                policyEvaluations:
+                  type: array
+                  description: Policy evaluation results for the proposed actions.
+                  items:
+                    type: object
+                    description: Individual policy evaluation record.
+                    x-kubernetes-preserve-unknown-fields: true
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Actions
+          type: integer
+          jsonPath: .spec.actions
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
