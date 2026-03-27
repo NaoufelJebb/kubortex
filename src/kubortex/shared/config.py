@@ -5,18 +5,50 @@ from __future__ import annotations
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class KubortexSettings(BaseSettings):
-    """Central configuration for all Kubortex components.
+class SharedSettings(BaseSettings):
+    """Settings common to all Kubortex components.
 
-    Values are read from environment variables prefixed with ``KUBORTEX_``.
+    Loaded from env vars prefixed with ``KUBORTEX_``.
     """
 
-    model_config = SettingsConfigDict(env_prefix="KUBORTEX_", env_nested_delimiter="__")
+    model_config = SettingsConfigDict(env_prefix="KUBORTEX_")
 
     # -- Kubernetes ----------------------------------------------------------
     namespace: str = "kubortex-system"
     crd_group: str = "kubortex.io"
     crd_version: str = "v1alpha1"
+
+    # -- Observability -------------------------------------------------------
+    log_level: str = "info"
+
+
+class EdgeSettings(SharedSettings):
+    """Settings for the kubortex-edge component.
+
+    Env vars (prefix: ``KUBORTEX_``):
+    - ``KUBORTEX_HOST``, ``KUBORTEX_PORT``
+    - ``KUBORTEX_SLACK_BOT_TOKEN``, ``KUBORTEX_SLACK_CHANNEL``,
+      ``KUBORTEX_SLACK_ESCALATION_CHANNEL``
+    """
+
+    # -- HTTP server ---------------------------------------------------------
+    host: str = "0.0.0.0"
+    port: int = 8080
+
+    # -- Slack ---------------------------------------------------------------
+    slack_bot_token: str = ""
+    slack_channel: str = "#sre-oncall"
+    slack_escalation_channel: str = "#sre-escalations"
+
+    # -- Signal correlation --------------------------------------------------
+    correlation_window_seconds: int = 300
+
+
+class KubortexSettings(SharedSettings):
+    """Settings for investigator, remediator, and operator components.
+
+    Values are read from environment variables prefixed with ``KUBORTEX_``.
+    """
 
     # -- LLM -----------------------------------------------------------------
     llm_provider: str = "openai"
@@ -28,11 +60,6 @@ class KubortexSettings(BaseSettings):
     # -- Prometheus / Loki ---------------------------------------------------
     prometheus_url: str = "http://prometheus.monitoring:9090"
     loki_url: str = "http://loki.monitoring:3100"
-
-    # -- Slack ---------------------------------------------------------------
-    slack_bot_token: str = ""
-    slack_channel: str = "#sre-oncall"
-    slack_escalation_channel: str = "#sre-escalations"
 
     # -- Payload store -------------------------------------------------------
     payload_store_path: str = "/data/payloads"

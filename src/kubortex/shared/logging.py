@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import logging
+
 import structlog
 
 
-def configure_logging(*, component: str, json_output: bool = True) -> None:
+def configure_logging(
+    *, component: str, level: str = "INFO", json_output: bool = True
+) -> None:
     """Set up structlog processors for a Kubortex component.
 
     Args:
         component: Name bound to every log line (e.g. ``operator``, ``edge``).
+        level: Stdlib logging level (e.g. ``"INFO"``, ``"DEBUG"``).
         json_output: Emit JSON lines when *True*, human-readable otherwise.
     """
+    logging.basicConfig(level=level.upper())
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,

@@ -21,8 +21,8 @@ _SEVERITY_MAP: dict[str, Severity] = {
     "none": Severity.INFO,
 }
 
-# AIDEV-NOTE: Category inference is heuristic — maps alertname patterns.
-# A more robust approach would use labels like "kubortex.io/category".
+# NOTE: Category inference is heuristic and based on alert name patterns.
+# Prefer explicit labels such as "kubortex.io/category" when available.
 _CATEGORY_KEYWORDS: dict[str, Category] = {
     "cpu": Category.RESOURCE_SATURATION,
     "memory": Category.RESOURCE_SATURATION,
@@ -47,12 +47,27 @@ _CATEGORY_KEYWORDS: dict[str, Category] = {
 
 
 def normalise_severity(raw: str) -> Severity:
-    """Map an Alertmanager severity label to a Kubortex Severity enum."""
+    """Map an Alertmanager severity label to a Kubortex enum.
+
+    Args:
+        raw: Raw severity label.
+
+    Returns:
+        Normalized Kubortex severity.
+    """
     return _SEVERITY_MAP.get(raw.lower(), Severity.WARNING)
 
 
 def infer_category(alertname: str, labels: dict[str, str]) -> Category:
-    """Infer a Kubortex Category from alert name and labels."""
+    """Infer a Kubortex category from alert metadata.
+
+    Args:
+        alertname: Alert name to inspect.
+        labels: Alert labels.
+
+    Returns:
+        Inferred Kubortex category.
+    """
     explicit = labels.get("kubortex_category") or labels.get("category")
     if explicit:
         try:
@@ -61,14 +76,23 @@ def infer_category(alertname: str, labels: dict[str, str]) -> Category:
             pass
 
     lower = alertname.lower()
+    compact = lower.replace("_", "").replace("-", "")
     for keyword, cat in _CATEGORY_KEYWORDS.items():
-        if keyword in lower:
+        normalised_keyword = keyword.replace("_", "").replace("-", "")
+        if keyword in lower or normalised_keyword in compact:
             return cat
     return Category.CUSTOM
 
 
 def extract_target_ref(labels: dict[str, str]) -> TargetRef | None:
-    """Extract a TargetRef from Alertmanager labels when possible."""
+    """Extract a target reference from alert labels.
+
+    Args:
+        labels: Alert labels.
+
+    Returns:
+        Target reference when one can be inferred, else ``None``.
+    """
     namespace = labels.get("namespace", "")
     # Try common label patterns for Kubernetes workloads
     for kind_label, kind_value in [
@@ -88,9 +112,13 @@ def extract_target_ref(labels: dict[str, str]) -> TargetRef | None:
 
 
 def normalise_alert(alert: dict[str, Any]) -> tuple[Signal, Category, TargetRef | None]:
-    """Normalise a single Alertmanager alert into Kubortex domain objects.
+    """Normalize one Alertmanager alert into Kubortex objects.
 
-    Returns (Signal, inferred Category, optional TargetRef).
+    Args:
+        alert: Raw Alertmanager alert payload.
+
+    Returns:
+        Parsed ``(signal, category, target)`` tuple.
     """
     labels = alert.get("labels", {})
     annotations = alert.get("annotations", {})

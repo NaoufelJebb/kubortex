@@ -83,6 +83,24 @@ async def patch_status(
         plural=plural,
         name=name,
         body={"status": status_patch},
+        _content_type="application/merge-patch+json",
+    )
+
+
+async def patch_spec(
+    plural: str, name: str, spec_patch: dict[str, Any], *, namespace: str | None = None
+) -> dict[str, Any]:
+    """PATCH spec fields of a custom resource (strategic merge patch)."""
+    s = _settings()
+    ns = namespace or s.namespace
+    return await _api().patch_namespaced_custom_object(
+        group=s.crd_group,
+        version=s.crd_version,
+        namespace=ns,
+        plural=plural,
+        name=name,
+        body={"spec": spec_patch},
+        _content_type="application/merge-patch+json",
     )
 
 

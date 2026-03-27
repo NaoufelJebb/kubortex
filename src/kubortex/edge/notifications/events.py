@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 
 class DomainEvent(BaseModel):
-    """Base domain event emitted by the event projector."""
+    """Notification event projected from a CRD state change."""
 
     event_type: str = Field(alias="eventType")
     incident_name: str = Field(alias="incidentName")

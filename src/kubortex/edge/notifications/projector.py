@@ -15,7 +15,14 @@ import structlog
 from kubernetes_asyncio import client as k8s_client
 from kubernetes_asyncio import watch
 
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import EdgeSettings
+from kubortex.shared.constants import (
+    ACTION_EXECUTIONS,
+    APPROVAL_REQUESTS,
+    INCIDENTS,
+    INVESTIGATIONS,
+    REMEDIATION_PLANS,
+)
 
 from .events import (
     ActionExecuted,
@@ -35,24 +42,28 @@ logger = structlog.get_logger(__name__)
 
 
 class EventProjector:
-    """Watches Kubortex CRDs and yields domain events on phase transitions."""
+    """Watch Kubortex CRDs and emit domain events on phase changes."""
 
-    def __init__(self, settings: KubortexSettings | None = None) -> None:
-        self._settings = settings or KubortexSettings()
+    def __init__(self, settings: EdgeSettings | None = None) -> None:
+        self._settings = settings or EdgeSettings()
         self._seen_phases: dict[str, str] = {}  # resource uid -> last seen phase
 
     async def watch_events(self) -> AsyncIterator[DomainEvent]:
-        """Yield domain events as CRD phases change."""
+        """Yield domain events from all watched CRD types.
+
+        Returns:
+            Async iterator of projected domain events.
+        """
         api = k8s_client.CustomObjectsApi()
         s = self._settings
 
         # Watch all CRD types concurrently
         tasks = [
-            self._watch_resource(api, s, "incidents"),
-            self._watch_resource(api, s, "investigations"),
-            self._watch_resource(api, s, "remediationplans"),
-            self._watch_resource(api, s, "approvalrequests"),
-            self._watch_resource(api, s, "actionexecutions"),
+            self._watch_resource(api, s, INCIDENTS),
+            self._watch_resource(api, s, INVESTIGATIONS),
+            self._watch_resource(api, s, REMEDIATION_PLANS),
+            self._watch_resource(api, s, APPROVAL_REQUESTS),
+            self._watch_resource(api, s, ACTION_EXECUTIONS),
         ]
 
         queue: asyncio.Queue[DomainEvent] = asyncio.Queue()
@@ -74,10 +85,19 @@ class EventProjector:
     async def _watch_resource(
         self,
         api: k8s_client.CustomObjectsApi,
-        settings: KubortexSettings,
+        settings: EdgeSettings,
         plural: str,
     ) -> AsyncIterator[DomainEvent]:
-        """Watch a single CRD type and yield domain events on phase changes."""
+        """Watch one CRD type and yield projected events.
+
+        Args:
+            api: Kubernetes custom objects client.
+            settings: Edge settings with CRD coordinates.
+            plural: Resource plural to watch.
+
+        Returns:
+            Async iterator of projected domain events.
+        """
         w = watch.Watch()
 
         while True:
@@ -104,7 +124,15 @@ class EventProjector:
                 await asyncio.sleep(5)
 
     def _project(self, plural: str, obj: dict[str, Any]) -> DomainEvent | None:
-        """Map a CRD object to a domain event if phase changed."""
+        """Project a CRD object to a domain event when its phase changes.
+
+        Args:
+            plural: Resource plural for the object.
+            obj: Kubernetes custom resource object.
+
+        Returns:
+            Projected domain event, or ``None`` when no event applies.
+        """
         uid = obj.get("metadata", {}).get("uid", "")
         status = obj.get("status") or {}
         phase = status.get("phase", "")
@@ -130,7 +158,16 @@ class EventProjector:
         return self._map_event(plural, phase, base)
 
     def _map_event(self, plural: str, phase: str, base: dict[str, Any]) -> DomainEvent | None:
-        """Map (resource plural, phase) to a concrete domain event class."""
+        """Map a resource type and phase to a domain event.
+
+        Args:
+            plural: Resource plural.
+            phase: Current resource phase.
+            base: Shared event payload fields.
+
+        Returns:
+            Concrete domain event, or ``None`` when unmapped.
+        """
         mapping: dict[tuple[str, str], type[DomainEvent]] = {
             ("incidents", "Detected"): IncidentDetected,
             ("incidents", "Resolved"): IncidentResolved,
@@ -151,7 +188,15 @@ class EventProjector:
         return cls(**base)
 
     def _resolve_incident_name(self, plural: str, obj: dict[str, Any]) -> str:
-        """Extract the incident name from the resource or its ownerRefs."""
+        """Resolve the incident name for a resource.
+
+        Args:
+            plural: Resource plural.
+            obj: Kubernetes custom resource object.
+
+        Returns:
+            Incident name for the resource.
+        """
         if plural == "incidents":
             return obj.get("metadata", {}).get("name", "")
 

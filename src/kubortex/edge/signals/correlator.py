@@ -13,35 +13,58 @@ from typing import Any
 
 import structlog
 
-from kubortex.shared.k8s import create_resource, get_resource, list_resources, patch_status
+from kubortex.shared.constants import INCIDENTS
+from kubortex.shared.k8s import (
+    create_resource,
+    get_resource,
+    list_resources,
+    patch_spec,
+    patch_status,
+)
 from kubortex.shared.models.incident import Signal, TargetRef
 from kubortex.shared.types import Category, Severity
 
 logger = structlog.get_logger(__name__)
 
-GROUP = "kubortex.io"
-VERSION = "v1alpha1"
-INCIDENTS = "incidents"
-
-CORRELATION_WINDOW_SECONDS = 300  # 5 minutes
-
 
 def _correlation_key(category: Category, target: TargetRef | None) -> str:
-    """Deterministic correlation key for grouping signals."""
+    """Build the correlation key for a signal group.
+
+    Args:
+        category: Incident category.
+        target: Optional target reference.
+
+    Returns:
+        Stable correlation key.
+    """
     ns = target.namespace if target else ""
     name = target.name if target else ""
     return f"{category}:{ns}/{name}"
 
 
 def _incident_name(key: str) -> str:
-    """Generate a stable incident name from the correlation key."""
+    """Generate a unique incident name from a correlation key.
+
+    Args:
+        key: Correlation key.
+
+    Returns:
+        Incident name.
+    """
     digest = hashlib.sha256(key.encode()).hexdigest()[:8]
-    ts = datetime.now(UTC).strftime("%Y%m%d")
+    ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S%f")
     return f"inc-{ts}-{digest}"
 
 
 def _highest_severity(signals: list[Signal]) -> Severity:
-    """Return the highest severity across signals."""
+    """Return the highest severity in a signal list.
+
+    Args:
+        signals: Signals to compare.
+
+    Returns:
+        Highest severity present.
+    """
     order = list(Severity)
     best = 0
     for s in signals:
@@ -56,25 +79,39 @@ async def correlate_and_upsert(
     category: Category,
     target: TargetRef | None,
     namespace: str,
+    crd_group: str = "kubortex.io",
+    crd_version: str = "v1alpha1",
+    correlation_window_seconds: int = 300,
 ) -> str:
-    """Correlate signals to an existing or new Incident, returning the Incident name."""
+    """Correlate signals into an incident and upsert the resource.
+
+    Args:
+        signals: Signals to correlate.
+        category: Incident category.
+        target: Optional target reference.
+        namespace: Namespace for the incident resource.
+        crd_group: Incident CRD API group.
+        crd_version: Incident CRD API version.
+        correlation_window_seconds: Window for reusing active incidents.
+
+    Returns:
+        Name of the existing or created incident.
+    """
     key = _correlation_key(category, target)
 
-    # Look for an active Incident with matching labels
-    existing = await _find_active_incident(category, target, namespace)
+    existing = await _find_active_incident(category, target, namespace, correlation_window_seconds)
     if existing:
         inc_name = existing["metadata"]["name"]
         await _append_signals(inc_name, signals, namespace)
         logger.info("incident_updated", name=inc_name, new_signals=len(signals))
         return inc_name
 
-    # Create a new Incident
     inc_name = _incident_name(key)
     severity = _highest_severity(signals)
     summary = signals[0].summary if signals else "Unknown incident"
 
     body: dict[str, Any] = {
-        "apiVersion": f"{GROUP}/{VERSION}",
+        "apiVersion": f"{crd_group}/{crd_version}",
         "kind": "Incident",
         "metadata": {
             "name": inc_name,
@@ -102,11 +139,23 @@ async def _find_active_incident(
     category: Category,
     target: TargetRef | None,
     namespace: str,
+    correlation_window_seconds: int,
 ) -> dict[str, Any] | None:
-    """Find an active (non-resolved, non-escalated) Incident with matching labels."""
+    """Find a matching active incident within the correlation window.
+
+    Args:
+        category: Incident category.
+        target: Optional target reference.
+        namespace: Namespace to search.
+        correlation_window_seconds: Maximum incident age to reuse.
+
+    Returns:
+        Matching incident resource, or ``None`` when absent.
+    """
     incidents = await list_resources(INCIDENTS, namespace=namespace)
     terminal = {"Resolved", "Escalated", "Suppressed"}
-    cutoff = datetime.now(UTC) - timedelta(seconds=CORRELATION_WINDOW_SECONDS)
+    cutoff = datetime.now(UTC) - timedelta(seconds=correlation_window_seconds)
+    expected_target = target.model_dump() if target else None
 
     for inc in incidents:
         phase = (inc.get("status") or {}).get("phase", "Detected")
@@ -115,7 +164,11 @@ async def _find_active_incident(
         labels = inc.get("metadata", {}).get("labels", {})
         if labels.get("kubortex.io/category") != category:
             continue
-        # Check creation time within correlation window
+        spec = inc.get("spec") or {}
+        actual_target = spec.get("targetRef")
+        # NOTE: Keep correlation target-aware to avoid merging unrelated workloads.
+        if actual_target != expected_target:
+            continue
         created = inc.get("metadata", {}).get("creationTimestamp", "")
         if created:
             created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
@@ -126,12 +179,19 @@ async def _find_active_incident(
 
 
 async def _append_signals(inc_name: str, signals: list[Signal], namespace: str) -> None:
-    """Append new signals to an existing Incident's spec."""
+    """Append signals to an existing incident.
+
+    Args:
+        inc_name: Incident name.
+        signals: Signals to append.
+        namespace: Incident namespace.
+    """
     inc = await get_resource(INCIDENTS, inc_name, namespace=namespace)
     existing_signals = inc.get("spec", {}).get("signals", [])
     new_entries = [s.model_dump(by_alias=True, mode="json") for s in signals]
-    existing_signals.extend(new_entries)
+    merged = existing_signals + new_entries
 
+    await patch_spec(INCIDENTS, inc_name, {"signals": merged}, namespace=namespace)
     await patch_status(
         INCIDENTS,
         inc_name,

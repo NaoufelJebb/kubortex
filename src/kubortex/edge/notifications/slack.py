@@ -11,7 +11,7 @@ from typing import Any
 import structlog
 from slack_sdk.web.async_client import AsyncWebClient
 
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import EdgeSettings
 
 from .events import DomainEvent
 
@@ -39,10 +39,10 @@ _TEMPLATES: dict[str, tuple[str, str]] = {
 
 
 class SlackNotifier:
-    """Delivers domain events as Slack messages, threaded per incident."""
+    """Sends domain events to Slack threads by incident."""
 
-    def __init__(self, settings: KubortexSettings | None = None) -> None:
-        self._settings = settings or KubortexSettings()
+    def __init__(self, settings: EdgeSettings | None = None) -> None:
+        self._settings = settings or EdgeSettings()
         self._client = AsyncWebClient(token=self._settings.slack_bot_token)
         self._channel = self._settings.slack_channel
         self._escalation_channel = self._settings.slack_escalation_channel
@@ -50,7 +50,11 @@ class SlackNotifier:
         self._threads: dict[str, str] = {}
 
     async def send(self, event: DomainEvent) -> None:
-        """Render and send a domain event to Slack."""
+        """Render and send a domain event.
+
+        Args:
+            event: Event to deliver.
+        """
         if not self._settings.slack_bot_token:
             logger.debug("slack_disabled", reason="no bot token")
             return
@@ -77,13 +81,24 @@ class SlackNotifier:
                 if ts:
                     self._threads[event.incident_name] = ts
 
-            logger.debug("slack_message_sent", event=event.event_type, channel=channel)
+            logger.debug(
+                "slack_message_sent",
+                event_type=event.event_type,
+                channel=channel,
+            )
 
         except Exception:
-            logger.exception("slack_send_failed", event=event.event_type)
+            logger.exception("slack_send_failed", event_type=event.event_type)
 
     def _render(self, event: DomainEvent) -> str:
-        """Render a domain event into a Slack message string."""
+        """Render a Slack message for a domain event.
+
+        Args:
+            event: Event to render.
+
+        Returns:
+            Rendered Slack message text.
+        """
         template = _TEMPLATES.get(event.event_type)
         if not template:
             return f"[{event.event_type}] {event.incident_name}"
@@ -106,7 +121,7 @@ class SlackNotifier:
 
 
 class SafeFormatDict(dict[str, Any]):
-    """Dict that returns the key name for missing format placeholders."""
+    """Returns placeholder names for missing format keys."""
 
     def __missing__(self, key: str) -> str:
         return f"<{key}>"

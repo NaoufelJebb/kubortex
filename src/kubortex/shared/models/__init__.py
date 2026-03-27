@@ -25,7 +25,6 @@ from .autonomy import (
     ConfidenceThresholds,
     CooldownConfig,
     NamespaceSelector,
-    NotificationConfig,
     VerificationConfig,
 )
 from .incident import (
@@ -88,7 +87,6 @@ __all__ = [
     "InvestigationSynopsis",
     "InvestigationTelemetry",
     "NamespaceSelector",
-    "NotificationConfig",
     "PolicyEvaluationResult",
     "PriorAttempt",
     "RecommendedAction",
