@@ -87,6 +87,35 @@ async def patch_status(
     )
 
 
+async def patch_status_versioned(
+    plural: str,
+    name: str,
+    resource_version: str,
+    status_patch: dict[str, Any],
+    *,
+    namespace: str | None = None,
+) -> dict[str, Any]:
+    """PATCH the status sub-resource with optimistic locking via resourceVersion.
+
+    Raises ``ApiException(status=409)`` when the resource was modified
+    concurrently since ``resource_version`` was read.
+    """
+    s = _settings()
+    ns = namespace or s.namespace
+    return await _api().patch_namespaced_custom_object_status(
+        group=s.crd_group,
+        version=s.crd_version,
+        namespace=ns,
+        plural=plural,
+        name=name,
+        body={
+            "metadata": {"resourceVersion": resource_version},
+            "status": status_patch,
+        },
+        _content_type="application/merge-patch+json",
+    )
+
+
 async def patch_spec(
     plural: str, name: str, spec_patch: dict[str, Any], *, namespace: str | None = None
 ) -> dict[str, Any]:

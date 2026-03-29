@@ -1,4 +1,4 @@
-"""Kopf handler for ApprovalRequest CRD lifecycle transitions.
+"""Kopf handlers governing ApprovalRequest CRD lifecycle transitions.
 
 Observes human decisions (via kubectl patch) and timeout expiry.
 """
@@ -10,17 +10,21 @@ from typing import Any
 
 import kopf
 import structlog
+from kubernetes_asyncio.client import ApiException
 
-from kubortex.shared.k8s import patch_status
-from kubortex.shared.types import ApprovalRequestPhase, DecisionType, IncidentPhase
+from kubortex.operator.settings import GROUP, VERSION, settings
+from kubortex.shared.constants import ACTION_EXECUTIONS, APPROVAL_REQUESTS, INCIDENTS
+from kubortex.shared.k8s import create_resource, get_resource, patch_status
+from kubortex.shared.types import (
+    ActionExecutionPhase,
+    ApprovalRequestPhase,
+    DecisionType,
+    IncidentPhase,
+)
+
+from ..budget import increment_usage, update_usage
 
 logger = structlog.get_logger(__name__)
-
-GROUP = "kubortex.io"
-VERSION = "v1alpha1"
-APPROVAL_REQUESTS = "approvalrequests"
-INCIDENTS = "incidents"
-ACTION_EXECUTIONS = "actionexecutions"
 
 
 @kopf.on.field(GROUP, VERSION, APPROVAL_REQUESTS, field="status.decision")
@@ -32,7 +36,25 @@ async def on_approval_decision(
     old: str | None,
     **_: Any,
 ) -> None:
-    """Handle human approval or rejection via kubectl patch."""
+    """React to a human decision written to ``status.decision``.
+
+    Guards:
+    - ``new`` must be non-empty (a decision was written).
+    - ``old`` must be None (prevents re-triggering if the field is updated).
+
+    On ``approved``: creates an ActionExecution (phase=Approved), increments
+    the action-type budget counter, and transitions the Incident to Executing.
+
+    On ``rejected``: closes the request and transitions the Incident to
+    Escalated — the human has explicitly declined to proceed.
+
+    Args:
+        body: ApprovalRequest resource body.
+        name: ApprovalRequest name.
+        namespace: ApprovalRequest namespace.
+        new: Decision value written by the human (``approved`` or ``rejected``).
+        old: Previous decision value (expected to be None).
+    """
     if not new or old:
         return
 
@@ -40,19 +62,23 @@ async def on_approval_decision(
     incident_ref = spec.get("incidentRef", "")
 
     if new == DecisionType.APPROVED:
-        await patch_status(
-            APPROVAL_REQUESTS,
-            name,
-            {"phase": ApprovalRequestPhase.APPROVED},
-            namespace=namespace,
-        )
+        try:
+            await patch_status(
+                APPROVAL_REQUESTS,
+                name,
+                {"phase": ApprovalRequestPhase.APPROVED},
+                namespace=namespace,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                logger.warning("approval_request_gone_on_decision", name=name)
+                return
+            raise
         logger.info("approval_approved", name=name)
 
-        # Create ActionExecution for the approved action
+        # Create ActionExecution for the approved action (409 = already created on retry)
         action = spec.get("action", {})
         ae_name = f"ae-{incident_ref}-{action.get('id', 'unknown')}"
-        from kubortex.shared.k8s import create_resource
-
         ae_body = {
             "apiVersion": f"{GROUP}/{VERSION}",
             "kind": "ActionExecution",
@@ -81,44 +107,97 @@ async def on_approval_decision(
                 "rollbackOnRegression": True,
             },
         }
-        await create_resource(ACTION_EXECUTIONS, ae_body, namespace=namespace)
-        await patch_status(
-            INCIDENTS,
-            incident_ref,
-            {"phase": IncidentPhase.EXECUTING},
-            namespace=namespace,
-        )
+        try:
+            await create_resource(ACTION_EXECUTIONS, ae_body, namespace=namespace)
+            await patch_status(
+                ACTION_EXECUTIONS,
+                ae_name,
+                {"phase": ActionExecutionPhase.APPROVED},
+                namespace=namespace,
+            )
+        except ApiException as exc:
+            if exc.status != 409:
+                raise
+            logger.info("action_execution_already_exists_on_approval", name=ae_name)
+
+        # Atomically increment budget for the approved action
+        try:
+            incident_resource = await get_resource(INCIDENTS, incident_ref, namespace=namespace)
+            profile_name = (incident_resource.get("status") or {}).get("autonomyProfile", "")
+            if profile_name:
+                action_type = action.get("type", "")
+                await update_usage(profile_name, lambda u: increment_usage(action_type, u))
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            logger.warning("incident_gone_on_budget_increment", incident=incident_ref)
+
+        try:
+            await patch_status(
+                INCIDENTS,
+                incident_ref,
+                {"phase": IncidentPhase.EXECUTING},
+                namespace=namespace,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
 
     elif new == DecisionType.REJECTED:
-        await patch_status(
-            APPROVAL_REQUESTS,
-            name,
-            {"phase": ApprovalRequestPhase.REJECTED},
-            namespace=namespace,
-        )
-        await patch_status(
-            INCIDENTS,
-            incident_ref,
-            {"phase": IncidentPhase.ESCALATED},
-            namespace=namespace,
-        )
+        try:
+            await patch_status(
+                APPROVAL_REQUESTS,
+                name,
+                {"phase": ApprovalRequestPhase.REJECTED},
+                namespace=namespace,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                logger.warning("approval_request_gone_on_rejection", name=name)
+                return
+            raise
+        try:
+            await patch_status(
+                INCIDENTS,
+                incident_ref,
+                {"phase": IncidentPhase.ESCALATED},
+                namespace=namespace,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
         logger.info("approval_rejected", name=name)
 
 
-@kopf.timer(GROUP, VERSION, APPROVAL_REQUESTS, interval=30)
+@kopf.timer(GROUP, VERSION, APPROVAL_REQUESTS, interval=settings.approval_check_interval)
 async def check_approval_timeout(
     body: dict[str, Any],
     name: str,
     namespace: str,
     **_: Any,
 ) -> None:
-    """Time out pending approvals that exceed their deadline."""
+    """Expire an ApprovalRequest and escalate the Incident when the timeout is reached.
+
+    Runs on a timer (interval=``settings.approval_check_interval``). Only
+    acts when the request is still Pending — approved/rejected requests are
+    ignored. The timeout window is read from ``spec.timeoutMinutes``, falling
+    back to ``settings.approval_timeout_minutes`` when absent.
+
+    On expiry: transitions ApprovalRequest → TimedOut and Incident →
+    Escalated. This ensures the incident is never silently abandoned if the
+    on-call engineer misses or ignores the request.
+
+    Args:
+        body: ApprovalRequest resource body.
+        name: ApprovalRequest name.
+        namespace: ApprovalRequest namespace.
+    """
     status = body.get("status", {})
     if status.get("phase") != ApprovalRequestPhase.PENDING:
         return
 
     created = body.get("metadata", {}).get("creationTimestamp")
-    timeout_minutes = body.get("spec", {}).get("timeoutMinutes", 30)
+    timeout_minutes = body.get("spec", {}).get("timeoutMinutes", settings.approval_timeout_minutes)
     if not created:
         return
 

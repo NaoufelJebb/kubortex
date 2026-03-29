@@ -29,7 +29,7 @@ from kubortex.shared.types import ApprovalLevel, Severity
 
 @dataclass(frozen=True)
 class PolicyDecision:
-    """Result of evaluating a single action against an AutonomyProfile."""
+    """Policy evaluation result for one action."""
 
     allowed: bool
     approval: ApprovalLevel = ApprovalLevel.REQUIRED
@@ -40,7 +40,7 @@ class PolicyDecision:
 
 @dataclass(frozen=True)
 class ActionContext:
-    """Minimal context needed to evaluate an action."""
+    """Inputs required to evaluate one action."""
 
     action_type: str
     severity: Severity
@@ -50,7 +50,7 @@ class ActionContext:
 
 @dataclass
 class CooldownState:
-    """Tracks per-target last-remediation timestamps."""
+    """Last remediation timestamps by target."""
 
     last_remediation: dict[str, datetime] = field(default_factory=dict)
 
@@ -61,7 +61,19 @@ class CooldownState:
 
 
 def _check_whitelist(action: ActionContext, profile: AutonomyProfileSpec) -> str | None:
-    """Return deny reason if action is not listed in any autonomy rule."""
+    """Check whether the action is explicitly permitted by an autonomy rule.
+
+    The whitelist is the allow-list layer of the policy engine: an action must
+    appear in at least one autonomy rule before the operator is allowed to
+    consider it for remediation.
+
+    Args:
+        action: Action to evaluate.
+        profile: Autonomy profile to check.
+
+    Returns:
+        Deny reason, or ``None`` when allowed.
+    """
     for rule in profile.autonomy_rules:
         if action.action_type in rule.actions:
             return None
@@ -69,7 +81,19 @@ def _check_whitelist(action: ActionContext, profile: AutonomyProfileSpec) -> str
 
 
 def _check_blackout(now: datetime, windows: list[BlackoutWindow]) -> str | None:
-    """Return deny reason if a blackout window is currently active."""
+    """Check whether remediation is blocked by a configured blackout window.
+
+    A blackout window is a scheduled freeze period, expressed as a cron-based
+    recurring start time plus a fixed duration. If the current time falls
+    inside that interval, the action is denied.
+
+    Args:
+        now: Evaluation time.
+        windows: Configured blackout windows.
+
+    Returns:
+        Deny reason, or ``None`` when no window applies.
+    """
     for win in windows:
         it = croniter(win.cron, now)
         prev_fire: datetime = it.get_prev(datetime)
@@ -81,7 +105,20 @@ def _check_blackout(now: datetime, windows: list[BlackoutWindow]) -> str | None:
 
 
 def _check_budget(action: ActionContext, budgets: Budgets, usage: BudgetUsage) -> str | None:
-    """Return deny reason if a hard budget ceiling would be exceeded."""
+    """Check whether the action would exceed a hard operational budget.
+
+    Budgets cap how much autonomous remediation the operator may perform over a
+    time window or concurrently. These limits are hard stops, meaning approval
+    cannot override them.
+
+    Args:
+        action: Action to evaluate.
+        budgets: Budget limits.
+        usage: Current budget usage.
+
+    Returns:
+        Deny reason, or ``None`` when within budget.
+    """
     if action.action_type == "restart-pod":
         if usage.pods_killed_this_hour >= budgets.max_pods_killed_per_hour:
             return "maxPodsKilledPerHour budget exhausted"
@@ -104,7 +141,20 @@ def _check_cooldown(
     cooldown_state: CooldownState,
     now: datetime,
 ) -> str | None:
-    """Return deny reason if the target is under cooldown."""
+    """Check whether the action target is still in a cooldown period.
+
+    Cooldown prevents repeated remediation of the same target too quickly after
+    a previous action, which reduces flapping and repeated disruption.
+
+    Args:
+        action: Action to evaluate.
+        cooldown_after_seconds: Cooldown duration in seconds.
+        cooldown_state: Cooldown state by target.
+        now: Evaluation time.
+
+    Returns:
+        Deny reason, or ``None`` when cooldown has expired.
+    """
     last = cooldown_state.last_remediation.get(action.target_key)
     if last is None:
         return None
@@ -115,8 +165,20 @@ def _check_cooldown(
     return None
 
 
-def _determine_approval(action: ActionContext, profile: AutonomyProfileSpec) -> ApprovalLevel:
-    """Determine the required approval level for the action."""
+def _resolve_approval_level(action: ActionContext, profile: AutonomyProfileSpec) -> ApprovalLevel:
+    """Determine whether the action can auto-execute or needs approval.
+
+    The approval rule expresses the autonomy posture for a matched action:
+    ``none`` means the operator may execute it automatically, while
+    ``required`` means a human approval step is needed first.
+
+    Args:
+        action: Action to evaluate.
+        profile: Autonomy profile to check.
+
+    Returns:
+        Required approval level.
+    """
     for rule in profile.autonomy_rules:
         if action.action_type not in rule.actions:
             continue
@@ -141,10 +203,17 @@ def evaluate_action(
     cooldown_state: CooldownState | None = None,
     now: datetime | None = None,
 ) -> PolicyDecision:
-    """Evaluate a proposed action against the AutonomyProfile.
+    """Evaluate an action against an autonomy profile.
 
-    Returns a :class:`PolicyDecision` indicating whether the action is
-    allowed, and if so, whether approval is required.
+    Args:
+        action: Action to evaluate.
+        profile: Autonomy profile to check.
+        budget_usage: Current budget usage.
+        cooldown_state: Optional cooldown state by target.
+        now: Optional evaluation time.
+
+    Returns:
+        Policy decision for the action.
     """
     now = now or datetime.now(UTC)
     cooldown_state = cooldown_state or CooldownState()
@@ -181,7 +250,7 @@ def evaluate_action(
         )
 
     # 6. Approval level
-    approval = _determine_approval(action, profile)
+    approval = _resolve_approval_level(action, profile)
     if approval == ApprovalLevel.NONE and action.confidence >= thresholds.auto_remediate:
         return PolicyDecision(
             allowed=True,

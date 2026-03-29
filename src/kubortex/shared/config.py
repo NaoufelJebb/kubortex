@@ -44,6 +44,38 @@ class EdgeSettings(SharedSettings):
     correlation_window_seconds: int = 300
 
 
+class OperatorSettings(SharedSettings):
+    """Settings for the kubortex-operator component.
+
+    Env vars (prefix: ``KUBORTEX_``):
+    - ``KUBORTEX_LIVENESS_PORT``
+    - ``KUBORTEX_INVESTIGATION_TIMEOUT_SECONDS``, ``KUBORTEX_INVESTIGATION_MAX_ITERATIONS``
+    - ``KUBORTEX_ESCALATION_DEADLINE_MINUTES``, ``KUBORTEX_ESCALATION_CHECK_INTERVAL``
+    - ``KUBORTEX_APPROVAL_TIMEOUT_MINUTES``, ``KUBORTEX_APPROVAL_CHECK_INTERVAL``
+    - ``KUBORTEX_BUDGET_RESET_INTERVAL``, ``KUBORTEX_MAX_RETRIES``
+    """
+
+    # -- HTTP server (liveness probe) ----------------------------------------
+    liveness_host: str = "0.0.0.0"
+    liveness_port: int = 8080
+
+    # -- Investigation defaults (written into Investigation CRD spec) ---------
+    investigation_timeout_seconds: int = 300
+    investigation_max_iterations: int = 10
+    escalation_deadline_minutes: int = 15
+
+    # -- Timer intervals (kopf decorator arguments, evaluated at import time) -
+    escalation_check_interval: int = 30
+    approval_check_interval: int = 30
+    budget_reset_interval: int = 60
+
+    # -- Approval -------------------------------------------------------------
+    approval_timeout_minutes: int = 30
+
+    # -- Retry ----------------------------------------------------------------
+    max_retries: int = 2
+
+
 class KubortexSettings(SharedSettings):
     """Settings for investigator, remediator, and operator components.
 

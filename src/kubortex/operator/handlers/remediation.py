@@ -1,4 +1,4 @@
-"""Kopf handler for RemediationPlan CRD lifecycle transitions.
+"""Kopf handler governing RemediationPlan CRD lifecycle transitions.
 
 Evaluates proposed actions via the policy engine and creates ApprovalRequests
 or ActionExecutions based on policy decisions.
@@ -10,27 +10,32 @@ from typing import Any
 
 import kopf
 import structlog
+from kubernetes_asyncio.client import ApiException
 
+from kubortex.operator.settings import GROUP, VERSION, settings
+from kubortex.shared.constants import (
+    ACTION_EXECUTIONS,
+    APPROVAL_REQUESTS,
+    AUTONOMY_PROFILES,
+    INCIDENTS,
+    REMEDIATION_PLANS,
+)
 from kubortex.shared.k8s import create_resource, get_resource, patch_status
-from kubortex.shared.models.autonomy import AutonomyProfileSpec, BudgetUsage
+from kubortex.shared.models.autonomy import AutonomyProfileSpec
 from kubortex.shared.models.remediation import RemediationPlanSpec
 from kubortex.shared.types import (
+    ActionExecutionPhase,
     ApprovalLevel,
+    ApprovalRequestPhase,
     IncidentPhase,
     RemediationPlanPhase,
+    Severity,
 )
 
+from ..budget import increment_usage, update_usage
 from ..policy import ActionContext, evaluate_action
 
 logger = structlog.get_logger(__name__)
-
-GROUP = "kubortex.io"
-VERSION = "v1alpha1"
-REMEDIATION_PLANS = "remediationplans"
-APPROVAL_REQUESTS = "approvalrequests"
-ACTION_EXECUTIONS = "actionexecutions"
-INCIDENTS = "incidents"
-AUTONOMY_PROFILES = "autonomyprofiles"
 
 
 @kopf.on.create(GROUP, VERSION, REMEDIATION_PLANS)
@@ -40,10 +45,55 @@ async def on_remediation_plan_create(
     namespace: str,
     **_: Any,
 ) -> None:
-    """Evaluate each action in the plan and create approval/execution CRs."""
+    """Policy-evaluate each action in the plan and spawn child resources.
+
+    Reads the AutonomyProfile referenced by the parent Incident, then runs
+    every proposed action through the policy engine. Allowed actions become
+    either an ApprovalRequest (``approval=required``) or an ActionExecution
+    (``approval=none``). Budget counters are incremented immediately for
+    auto-approved actions so that concurrent plan evaluations see up-to-date
+    usage.
+
+    Terminal outcomes:
+    - All actions denied → plan Rejected, Incident Escalated.
+    - At least one action needs approval → Incident PendingApproval.
+    - All actions auto-approved → no Incident phase change here; the
+      ActionExecution handler drives the next transition.
+
+    No-profile guard: if the Incident carries no ``autonomyProfile``, the
+    plan is rejected immediately without policy evaluation.
+
+    Args:
+        body: RemediationPlan resource body.
+        name: RemediationPlan name.
+        namespace: RemediationPlan namespace.
+    """
     plan_spec = RemediationPlanSpec.model_validate(body.get("spec", {}))
-    incident = await get_resource("incidents", plan_spec.incident_ref, namespace=namespace)
+    try:
+        incident = await get_resource("incidents", plan_spec.incident_ref, namespace=namespace)
+    except ApiException as exc:
+        if exc.status == 404:
+            logger.warning("incident_gone_on_plan_create", plan=name, incident=plan_spec.incident_ref)
+            await patch_status(
+                REMEDIATION_PLANS, name, {"phase": RemediationPlanPhase.REJECTED}, namespace=namespace
+            )
+            return
+        raise
+
+    # Record the association on the incident regardless of outcome
+    try:
+        await patch_status(
+            INCIDENTS,
+            plan_spec.incident_ref,
+            {"remediationPlanRef": name},
+            namespace=namespace,
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+
     profile_name = (incident.get("status") or {}).get("autonomyProfile", "")
+    incident_severity = Severity((incident.get("spec") or {}).get("severity", Severity.WARNING))
 
     if not profile_name:
         await patch_status(
@@ -54,19 +104,33 @@ async def on_remediation_plan_create(
         )
         return
 
-    profile_resource = await get_resource(AUTONOMY_PROFILES, profile_name)
+    try:
+        profile_resource = await get_resource(AUTONOMY_PROFILES, profile_name)
+    except ApiException as exc:
+        if exc.status == 404:
+            logger.warning("autonomy_profile_gone_on_plan_create", plan=name, profile=profile_name)
+            await patch_status(
+                REMEDIATION_PLANS, name, {"phase": RemediationPlanPhase.REJECTED}, namespace=namespace
+            )
+            return
+        raise
+
     profile_spec = AutonomyProfileSpec.model_validate(profile_resource.get("spec", {}))
+    # Read current usage for policy evaluation (snapshot — not used for the final write).
+    from kubortex.shared.models.autonomy import BudgetUsage
+
     budget_usage = BudgetUsage.model_validate(
         (profile_resource.get("status") or {}).get("budgetUsage", {})
     )
 
     needs_approval = False
     all_denied = True
+    executed_action_types: list[str] = []
 
     for action in plan_spec.actions:
         ctx = ActionContext(
             action_type=action.type,
-            severity=plan_spec.confidence,  # type: ignore[arg-type]
+            severity=incident_severity,
             confidence=plan_spec.confidence,
             target_key=f"{action.target.namespace}/{action.target.name}",
         )
@@ -79,9 +143,29 @@ async def on_remediation_plan_create(
         all_denied = False
         if decision.approval == ApprovalLevel.REQUIRED:
             needs_approval = True
-            await _create_approval_request(name, plan_spec, action, namespace)
+            try:
+                await _create_approval_request(name, plan_spec, action, namespace)
+            except ApiException as exc:
+                if exc.status != 409:
+                    raise
+                logger.info("approval_request_already_exists", plan=name, action=action.id)
         else:
-            await _create_action_execution(name, plan_spec, action, namespace)
+            try:
+                await _create_action_execution(name, plan_spec, action, namespace)
+            except ApiException as exc:
+                if exc.status != 409:
+                    raise
+                logger.info("action_execution_already_exists", plan=name, action=action.id)
+            executed_action_types.append(action.type)
+
+    # Atomically increment budget for auto-approved actions using optimistic locking.
+    if executed_action_types:
+        def _apply_increments(usage: BudgetUsage) -> BudgetUsage:
+            for action_type in executed_action_types:
+                usage = increment_usage(action_type, usage)
+            return usage
+
+        await update_usage(profile_name, _apply_increments)
 
     if all_denied:
         await patch_status(
@@ -90,19 +174,27 @@ async def on_remediation_plan_create(
             {"phase": RemediationPlanPhase.REJECTED},
             namespace=namespace,
         )
-        await patch_status(
-            INCIDENTS,
-            plan_spec.incident_ref,
-            {"phase": IncidentPhase.ESCALATED},
-            namespace=namespace,
-        )
+        try:
+            await patch_status(
+                INCIDENTS,
+                plan_spec.incident_ref,
+                {"phase": IncidentPhase.ESCALATED},
+                namespace=namespace,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
     elif needs_approval:
-        await patch_status(
-            INCIDENTS,
-            plan_spec.incident_ref,
-            {"phase": IncidentPhase.PENDING_APPROVAL},
-            namespace=namespace,
-        )
+        try:
+            await patch_status(
+                INCIDENTS,
+                plan_spec.incident_ref,
+                {"phase": IncidentPhase.PENDING_APPROVAL},
+                namespace=namespace,
+            )
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
 
 
 async def _create_approval_request(
@@ -111,7 +203,20 @@ async def _create_approval_request(
     action: Any,
     namespace: str,
 ) -> None:
-    """Create an ApprovalRequest CR for one action."""
+    """Create an ApprovalRequest CRD and set its initial phase to Pending.
+
+    The ApprovalRequest carries the full action context (type, target,
+    parameters, rationale, risk tier) plus the investigation synopsis so
+    the approver has the evidence needed to make an informed decision.
+    The operator watches ApprovalRequest ``status.decision`` to continue
+    the lifecycle once a human responds.
+
+    Args:
+        plan_name: RemediationPlan name (written as ``remediationPlanRef``).
+        plan_spec: Parsed RemediationPlan spec.
+        action: Action proposal that requires human approval.
+        namespace: Namespace for the new ApprovalRequest.
+    """
     ar_name = f"ar-req-{plan_spec.incident_ref}-{action.id}"
     ar_body = {
         "apiVersion": f"{GROUP}/{VERSION}",
@@ -139,10 +244,16 @@ async def _create_approval_request(
                 "hypothesis": plan_spec.hypothesis,
                 "confidence": plan_spec.confidence,
             },
-            "timeoutMinutes": 30,
+            "timeoutMinutes": settings.approval_timeout_minutes,
         },
     }
     await create_resource(APPROVAL_REQUESTS, ar_body, namespace=namespace)
+    await patch_status(
+        APPROVAL_REQUESTS,
+        ar_name,
+        {"phase": ApprovalRequestPhase.PENDING},
+        namespace=namespace,
+    )
     logger.info("approval_request_created", name=ar_name)
 
 
@@ -152,7 +263,20 @@ async def _create_action_execution(
     action: Any,
     namespace: str,
 ) -> None:
-    """Create an ActionExecution CR for an auto-approved action."""
+    """Create an ActionExecution CRD and set its initial phase to Approved.
+
+    Called for actions that the policy engine approved without requiring
+    human sign-off. The ActionExecution is created in phase Approved so the
+    remediator worker can claim it immediately. The verification metric and
+    rollback flag are forwarded from the plan so the worker can perform
+    post-action health checks without reading the plan again.
+
+    Args:
+        plan_name: RemediationPlan name (written as ``remediationPlanRef``).
+        plan_spec: Parsed RemediationPlan spec.
+        action: Auto-approved action proposal.
+        namespace: Namespace for the new ActionExecution.
+    """
     ae_name = f"ae-{plan_spec.incident_ref}-{action.id}"
     ae_body = {
         "apiVersion": f"{GROUP}/{VERSION}",
@@ -183,4 +307,10 @@ async def _create_action_execution(
         },
     }
     await create_resource(ACTION_EXECUTIONS, ae_body, namespace=namespace)
+    await patch_status(
+        ACTION_EXECUTIONS,
+        ae_name,
+        {"phase": ActionExecutionPhase.APPROVED},
+        namespace=namespace,
+    )
     logger.info("action_execution_created", name=ae_name)

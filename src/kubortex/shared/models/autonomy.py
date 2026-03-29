@@ -6,7 +6,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from kubortex.shared.types import ApprovalLevel, Severity
+from kubortex.shared.types import ApprovalLevel, Category, Severity
 
 from .incident import Condition
 
@@ -16,16 +16,16 @@ from .incident import Condition
 
 
 class NamespaceSelector(BaseModel):
+    match_names: list[str] = Field(default_factory=list, alias="matchNames")
     match_labels: dict[str, str] = Field(default_factory=dict, alias="matchLabels")
 
     model_config = {"populate_by_name": True}
 
 
 class AutonomyScope(BaseModel):
-    namespace_selector: NamespaceSelector = Field(
-        default_factory=NamespaceSelector, alias="namespaceSelector"
-    )
+    namespaces: NamespaceSelector = Field(default_factory=NamespaceSelector)
     severities: list[Severity] = Field(default_factory=list)
+    categories: list[Category] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}
 
@@ -79,13 +79,6 @@ class VerificationConfig(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class NotificationConfig(BaseModel):
-    slack_channel: str = Field("", alias="slackChannel")
-    escalation_channel: str = Field("", alias="escalationChannel")
-
-    model_config = {"populate_by_name": True}
-
-
 # ---------------------------------------------------------------------------
 # Budget usage tracking (status sub-model)
 # ---------------------------------------------------------------------------
@@ -119,7 +112,6 @@ class AutonomyProfileSpec(BaseModel):
         default_factory=ConfidenceThresholds, alias="confidenceThresholds"
     )
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
-    notifications: NotificationConfig = Field(default_factory=NotificationConfig)
 
     model_config = {"populate_by_name": True}
 
