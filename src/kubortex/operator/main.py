@@ -33,11 +33,11 @@ async def login(**kwargs: object) -> kopf.ConnectionInfo:
 
 def main() -> None:
     """Run the operator."""
-    kopf.run(
+    kopf.run(  # pragma: no cover
         clusterwide=True,
         liveness_endpoint=f"http://{settings.liveness_host}:{settings.liveness_port}/healthz",
     )
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     main()
