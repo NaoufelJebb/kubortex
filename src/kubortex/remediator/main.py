@@ -9,7 +9,7 @@ import asyncio
 
 from kubernetes_asyncio import config as k8s_config
 
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import RemediatorSettings
 from kubortex.shared.logging import configure_logging
 
 from .worker import RemediatorWorker
@@ -23,7 +23,7 @@ async def _run() -> None:
     except k8s_config.ConfigException:
         await k8s_config.load_kube_config()
 
-    settings = KubortexSettings()
+    settings = RemediatorSettings()
     worker = RemediatorWorker(settings)
     await worker.run()
 

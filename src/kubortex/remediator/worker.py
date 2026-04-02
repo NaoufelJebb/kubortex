@@ -7,30 +7,26 @@ If verification detects regression, rollback is attempted.
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 import structlog
 
 from kubortex.remediator.actions.registry import get_action
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import RemediatorSettings
 from kubortex.shared.k8s import list_resources, patch_status, try_claim
 
 logger = structlog.get_logger(__name__)
-
-POD_NAME = os.environ.get("POD_NAME", "remediator-0")
-POLL_INTERVAL = 5
 
 
 class RemediatorWorker:
     """Watches for Approved ActionExecutions and runs the remediation pipeline."""
 
-    def __init__(self, settings: KubortexSettings) -> None:
+    def __init__(self, settings: RemediatorSettings) -> None:
         self._settings = settings
 
     async def run(self) -> None:
         """Main polling loop — runs until cancelled."""
-        logger.info("remediator_worker_started", pod=POD_NAME)
+        logger.info("remediator_worker_started", pod=self._settings.pod_name)
 
         while True:
             try:
@@ -41,7 +37,7 @@ class RemediatorWorker:
             except Exception:
                 logger.exception("poll_cycle_error")
 
-            await asyncio.sleep(POLL_INTERVAL)
+            await asyncio.sleep(self._settings.poll_interval_seconds)
 
     async def _poll_and_process(self) -> None:
         """Find Approved ActionExecutions, claim one, and run it."""
@@ -58,7 +54,7 @@ class RemediatorWorker:
 
         for ae in approved:
             name = ae["metadata"]["name"]
-            claimed = await try_claim("actionexecutions", name, POD_NAME)
+            claimed = await try_claim("actionexecutions", name, self._settings.pod_name)
             if claimed:
                 await self._run_action(ae)
                 break
