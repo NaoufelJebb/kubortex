@@ -10,7 +10,7 @@ from typing import Any
 
 import structlog
 
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import InvestigatorSettings
 
 from .store import LearningStore
 
@@ -20,9 +20,8 @@ logger = structlog.get_logger(__name__)
 class StrategyRanker:
     """Ranks investigation skills based on historical success data."""
 
-    def __init__(self, store: LearningStore) -> None:
+    def __init__(self, store: LearningStore, settings: InvestigatorSettings) -> None:
         self._store = store
-        settings = KubortexSettings()
         self._min_samples = settings.learning_min_samples
         self._alpha = settings.learning_decay_alpha
 

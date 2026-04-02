@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from kubortex.investigator.context.assembler import ContextAssembler
 from kubortex.investigator.skills.gateway import CapabilityGateway
-from kubortex.investigator.skills.models import SkillInput
+from kubortex.shared.models import SkillInput
 
 from .prompts import INVESTIGATION_SYSTEM_PROMPT
 from .state import InvestigationState

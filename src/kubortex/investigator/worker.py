@@ -8,7 +8,6 @@ back into the Investigation status.
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 import structlog
@@ -24,29 +23,26 @@ from kubortex.investigator.runbooks.matcher import match_runbook
 from kubortex.investigator.runbooks.registry import RunbookRegistry
 from kubortex.investigator.skills.gateway import CapabilityGateway
 from kubortex.investigator.skills.registry import SkillRegistry
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import InvestigatorSettings
 from kubortex.shared.k8s import list_resources, patch_status, try_claim
 
 logger = structlog.get_logger(__name__)
-
-POD_NAME = os.environ.get("POD_NAME", "investigator-0")
-POLL_INTERVAL = 5  # seconds
 
 
 class InvestigatorWorker:
     """Watches for pending Investigations and runs the ReAct graph."""
 
-    def __init__(self, settings: KubortexSettings) -> None:
+    def __init__(self, settings: InvestigatorSettings) -> None:
         self._settings = settings
         self._skill_registry = SkillRegistry(settings.skills_dir)
         self._runbook_registry = RunbookRegistry(settings.runbooks_dir)
         self._learning_store = LearningStore(settings.learning_store_path)
-        self._ranker = StrategyRanker(self._learning_store)
-        self._payload_store = PayloadStore()
+        self._ranker = StrategyRanker(self._learning_store, settings)
+        self._payload_store = PayloadStore(settings)
 
     async def run(self) -> None:
         """Main polling loop — runs until cancelled."""
-        logger.info("investigator_worker_started", pod=POD_NAME)
+        logger.info("investigator_worker_started", pod=self._settings.pod_name)
 
         while True:
             try:
@@ -57,7 +53,7 @@ class InvestigatorWorker:
             except Exception:
                 logger.exception("poll_cycle_error")
 
-            await asyncio.sleep(POLL_INTERVAL)
+            await asyncio.sleep(self._settings.poll_interval_seconds)
 
     async def _poll_and_process(self) -> None:
         """Find pending Investigations, claim one, and run it."""
@@ -75,7 +71,7 @@ class InvestigatorWorker:
         # Try to claim the first available
         for inv in pending:
             name = inv["metadata"]["name"]
-            claimed = await try_claim("investigations", name, POD_NAME)
+            claimed = await try_claim("investigations", name, self._settings.pod_name)
             if claimed:
                 await self._run_investigation(inv)
                 break
@@ -150,7 +146,7 @@ class InvestigatorWorker:
                 "matched_runbook": matched.name if matched else None,
                 "loaded_runbook": False,
                 "investigation_name": name,
-                "max_iterations": self._settings.investigator_max_iterations,
+                "max_iterations": self._settings.max_iterations,
             }
 
             result_state = await graph.ainvoke(initial_state)

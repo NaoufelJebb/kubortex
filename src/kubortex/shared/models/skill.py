@@ -1,4 +1,4 @@
-"""Pydantic models for skill manifests and invocation results."""
+"""Pydantic models shared by investigator skill discovery and execution."""
 
 from __future__ import annotations
 
@@ -15,9 +15,9 @@ class SkillManifest(BaseModel):
     entrypoint: str
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-    # Derived at registry load time
-    body: str = ""  # Full markdown body (loaded lazily)
-    dir_path: str = ""  # Filesystem path to the skill directory
+    # Derived at registry load time.
+    body: str = ""  # Full markdown body (loaded lazily).
+    dir_path: str = ""  # Filesystem path to the skill directory.
 
 
 class SkillInput(BaseModel):

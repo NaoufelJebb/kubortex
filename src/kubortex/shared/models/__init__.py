@@ -55,6 +55,11 @@ from .remediation import (
     RemediationPlanStatus,
     VerificationMetric,
 )
+from .skill import (
+    SkillInput,
+    SkillManifest,
+    SkillResult,
+)
 
 __all__ = [
     "ActionDetail",
@@ -94,7 +99,10 @@ __all__ = [
     "RemediationPlanStatus",
     "RollbackResult",
     "Signal",
+    "SkillInput",
     "SkillInvocationRecord",
+    "SkillManifest",
+    "SkillResult",
     "TargetRef",
     "TimelineEntry",
     "VerificationConfig",

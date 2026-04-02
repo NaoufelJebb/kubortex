@@ -14,20 +14,20 @@ import structlog
 from kubernetes_asyncio import client as k8s_client
 from kubernetes_asyncio.client import ApiException
 
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import SharedSettings
 
 logger = structlog.get_logger(__name__)
 
 # AIDEV-NOTE: All CRD operations go through CustomObjectsApi to stay
 # generic across Incident, Investigation, ActionExecution, etc.
 
-_SETTINGS: KubortexSettings | None = None
+_SETTINGS: SharedSettings | None = None
 
 
-def _settings() -> KubortexSettings:
+def _settings() -> SharedSettings:
     global _SETTINGS
     if _SETTINGS is None:
-        _SETTINGS = KubortexSettings()
+        _SETTINGS = SharedSettings()
     return _SETTINGS
 
 

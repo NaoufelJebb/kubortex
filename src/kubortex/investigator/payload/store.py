@@ -14,7 +14,7 @@ from typing import Any
 
 import structlog
 
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import InvestigatorSettings
 
 logger = structlog.get_logger(__name__)
 
@@ -24,8 +24,11 @@ _GZIP_THRESHOLD = 10 * 1024  # 10 KiB
 class PayloadStore:
     """File-backed store keyed by ``{incident_name}/{investigation_name}/{seq}``."""
 
-    def __init__(self, root: Path | None = None) -> None:
-        settings = KubortexSettings()
+    def __init__(
+        self,
+        settings: InvestigatorSettings,
+        root: Path | None = None,
+    ) -> None:
         self._root = root or Path(settings.payload_store_path)
         self._max_size = settings.payload_max_size_bytes
 

@@ -8,14 +8,14 @@ from typing import Any
 import httpx
 
 from kubortex.investigator.skills.models import SkillInput, SkillResult
-from kubortex.shared.config import KubortexSettings
+from kubortex.shared.config import InvestigatorSettings
 
 
 class PromQLSkill:
     """Execute PromQL queries via the Prometheus HTTP API."""
 
     def __init__(self) -> None:
-        self._settings = KubortexSettings()
+        self._settings = InvestigatorSettings()
 
     async def execute(self, inp: SkillInput) -> SkillResult:
         query = inp.query
