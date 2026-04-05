@@ -11,7 +11,7 @@ from pathlib import Path
 import structlog
 import yaml
 
-from kubortex.shared.models import SkillManifest
+from .models import SkillManifest
 
 logger = structlog.get_logger(__name__)
 

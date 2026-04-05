@@ -38,5 +38,19 @@ class InvestigationState(TypedDict):
     # Investigation spec reference for result writing
     investigation_name: str
 
+    # Incident name for payload store keying
+    incident_name: str
+
     # Max iterations allowed
     max_iterations: int
+
+    # Payload sequence counter (incremented by summarise node)
+    seq: int
+
+    # Set by compression stage 5 to force immediate conclusion
+    force_conclude: bool
+    # Telemetry: serialised SkillInvocationRecord dicts collected during invoke nodes
+    skill_records: list[Any]
+
+    # IDs of injected skill/runbook HumanMessages eligible for eviction
+    injected_message_ids: list[str]

@@ -1,69 +1,62 @@
-"""Heuristic context budget tracking.
+"""Token-accurate context budget tracking via tiktoken.
 
-Estimates serialized prompt size using character counts and section weights.
-No exact token counting — uses heuristic reserves per SPEC §8.3.
+Counts real tokens instead of characters, so utilisation maps directly
+to the model's context window.  No section weights — one counter.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import tiktoken
 
 
-@dataclass
 class ContextBudget:
-    """Tracks approximate context usage via character counting."""
+    """Tracks token usage with tiktoken for accurate context window management."""
 
-    max_chars: int = 120_000
+    def __init__(self, max_tokens: int = 30_000, model: str = "gpt-4o") -> None:
+        try:
+            self._enc = tiktoken.encoding_for_model(model)
+        except KeyError:
+            self._enc = tiktoken.get_encoding("cl100k_base")
 
-    # Section weights (percentage of max_chars)
-    system_overhead_pct: float = 0.15
-    skill_runbook_pct: float = 0.15
-    evidence_pct: float = 0.50
-    reasoning_reserve_pct: float = 0.20
+        self.max_tokens = max_tokens
+        self.used_tokens: int = 0
+        self.compression_stage: int = 0
 
-    # Current usage
-    system_chars: int = 0
-    skill_chars: int = 0
-    evidence_chars: int = 0
+    # ------------------------------------------------------------------
+    # Counting helpers
+    # ------------------------------------------------------------------
 
-    # Compression stage tracking
-    compression_stage: int = field(default=0)
+    def count(self, text: str) -> int:
+        """Return the token count for *text*."""
+        return len(self._enc.encode(text))
 
-    @property
-    def total_used(self) -> int:
-        return self.system_chars + self.skill_chars + self.evidence_chars
+    # ------------------------------------------------------------------
+    # Mutation
+    # ------------------------------------------------------------------
+
+    def add(self, text: str) -> None:
+        """Charge *text* against the budget."""
+        self.used_tokens += self.count(text)
+
+    def evict(self, text: str) -> None:
+        """Reclaim tokens when *text* is removed from context."""
+        self.used_tokens = max(0, self.used_tokens - self.count(text))
+
+    def evict_tokens(self, n: int) -> None:
+        """Reclaim a known token count directly (use when original text is unavailable)."""
+        self.used_tokens = max(0, self.used_tokens - n)
+    # ------------------------------------------------------------------
+    # Budget queries
+    # ------------------------------------------------------------------
 
     @property
     def remaining(self) -> int:
-        usable = int(self.max_chars * (1 - self.reasoning_reserve_pct))
-        return max(0, usable - self.total_used)
-
-    @property
-    def evidence_remaining(self) -> int:
-        evidence_budget = int(self.max_chars * self.evidence_pct)
-        return max(0, evidence_budget - self.evidence_chars)
+        return max(0, self.max_tokens - self.used_tokens)
 
     @property
     def utilisation(self) -> float:
-        return self.total_used / self.max_chars if self.max_chars else 0.0
+        return self.used_tokens / self.max_tokens if self.max_tokens else 0.0
 
     @property
     def needs_compression(self) -> bool:
         return self.utilisation > 0.75
-
-    def add_system(self, chars: int) -> None:
-        self.system_chars += chars
-
-    def add_skill(self, chars: int) -> None:
-        self.skill_chars += chars
-
-    def add_evidence(self, chars: int) -> None:
-        self.evidence_chars += chars
-
-    def evict_skill(self, chars: int) -> None:
-        """Reclaim chars when a skill body is evicted from context."""
-        self.skill_chars = max(0, self.skill_chars - chars)
-
-    def compress_evidence(self, old_chars: int, new_chars: int) -> None:
-        """Track evidence compression."""
-        self.evidence_chars = max(0, self.evidence_chars - old_chars + new_chars)

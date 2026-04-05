@@ -11,9 +11,10 @@ import time
 
 import structlog
 
-from kubortex.shared.models import SkillInput, SkillInvocationRecord, SkillManifest, SkillResult
+from kubortex.shared.models.investigation import SkillInvocationRecord
 
 from .base import BaseSkill
+from .models import SkillInput, SkillManifest, SkillResult
 from .registry import SkillRegistry
 
 logger = structlog.get_logger(__name__)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from kubortex.shared.models import SkillInput, SkillResult
+from .models import SkillInput, SkillResult
 
 
 @runtime_checkable

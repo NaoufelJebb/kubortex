@@ -25,11 +25,12 @@ class ContextAssembler:
         self,
         skill_registry: SkillRegistry,
         runbook_registry: RunbookRegistry,
-        max_chars: int = 120_000,
+        max_tokens: int = 30_000,
+        model: str = "gpt-4o",
     ) -> None:
         self._skills = skill_registry
         self._runbooks = runbook_registry
-        self.budget = ContextBudget(max_chars=max_chars)
+        self.budget = ContextBudget(max_tokens=max_tokens, model=model)
         self.loaded_skills: set[str] = set()
         self.loaded_runbook: bool = False
         self._matched_runbook: RunbookManifest | None = None
@@ -39,9 +40,12 @@ class ContextAssembler:
         incident_context: dict[str, Any],
         diagnostic_hints: dict[str, Any] | None = None,
     ) -> str:
-        """Build the Layer 0 base prompt for investigation start."""
+        """Build the Layer 0 context prompt (incident + manifests + hints).
+
+        The system role instructions are loaded separately from SYSTEM_PROMPT.md
+        and prepended by the initialise node.
+        """
         sections = [
-            _system_instructions(),
             _incident_section(incident_context),
             _skill_manifest_section(self._skills),
             _runbook_manifest_section(self._runbooks),
@@ -51,7 +55,7 @@ class ContextAssembler:
             sections.append(_diagnostic_hints_section(diagnostic_hints))
 
         prompt = "\n\n".join(sections)
-        self.budget.add_system(len(prompt))
+        self.budget.add(prompt)
         return prompt
 
     def inject_skill_body(self, skill_name: str) -> str | None:
@@ -61,7 +65,7 @@ class ContextAssembler:
         body = self._skills.get_full_body(skill_name)
         if body:
             self.loaded_skills.add(skill_name)
-            self.budget.add_skill(len(body))
+            self.budget.add(body)
             return body
         return None
 
@@ -72,13 +76,13 @@ class ContextAssembler:
         body = self._runbooks.get_full_body(runbook_name)
         if body:
             self.loaded_runbook = True
-            self.budget.add_skill(len(body))
+            self.budget.add(body)
             return body
         return None
 
     def add_evidence(self, summary: str) -> None:
         """Track evidence added to context (Layer 3)."""
-        self.budget.add_evidence(len(summary))
+        self.budget.add(summary)
 
     @property
     def matched_runbook(self) -> RunbookManifest | None:
@@ -92,27 +96,6 @@ class ContextAssembler:
 # ---------------------------------------------------------------------------
 # Prompt section builders
 # ---------------------------------------------------------------------------
-
-
-def _system_instructions() -> str:
-    return """\
-You are an SRE investigator agent. Your job is to diagnose the root cause
-of a Kubernetes incident by gathering evidence through available skills.
-
-## Output Requirements
-- Produce a specific, testable hypothesis about the root cause.
-- Assign a calibrated confidence score (0.0-1.0).
-- List all evidence gathered with interpretations.
-- Recommend concrete remediation actions if confidence >= 0.60.
-- Set escalate=true if confidence < 0.60 or if the situation requires human judgment.
-
-## Confidence Calibration
-- >= 0.85: High confidence. Strong evidence, clear causal chain.
-- 0.60-0.85: Moderate confidence. Propose remediation but flag for review.
-- < 0.60: Low confidence. Escalate to human operator.
-
-## Available Action Types
-restart-pod, scale-up, rollback-deployment, cordon-node, drain-node"""
 
 
 def _incident_section(ctx: dict[str, Any]) -> str:

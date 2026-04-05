@@ -19,6 +19,11 @@ from .budget import ContextBudget
 
 logger = structlog.get_logger(__name__)
 
+# Token approximations used when the original text is no longer accessible.
+# Derived from typical SKILL.md and runbook body sizes at ~4 chars/token.
+_APPROX_SKILL_TOKENS = 750
+_APPROX_RUNBOOK_TOKENS = 500
+
 
 def apply_compression(
     budget: ContextBudget,
@@ -26,13 +31,14 @@ def apply_compression(
     loaded_skills: set[str],
     loaded_runbook: bool,
     messages: list[Any],
-) -> tuple[list[dict[str, Any]], bool]:
+    injected_message_ids: list[str] | None = None,
+) -> tuple[list[dict[str, Any]], bool, list[str]]:
     """Apply the next compression stage if budget pressure exists.
 
-    Returns (updated_evidence, should_force_conclude).
+    Returns (updated_evidence, should_force_conclude, message_ids_to_evict).
     """
     if not budget.needs_compression:
-        return evidence, False
+        return evidence, False, []
 
     stage = budget.compression_stage + 1
     budget.compression_stage = stage
@@ -43,18 +49,19 @@ def apply_compression(
     elif stage == 2:
         _evict_skill_bodies(loaded_skills, budget)
         logger.info("compression_stage_2", action="skill_body_eviction")
+        return evidence, False, list(injected_message_ids or [])
     elif stage == 3:
         if loaded_runbook:
-            budget.evict_skill(2000)  # approximate runbook body size
+            budget.evict_tokens(_APPROX_RUNBOOK_TOKENS)
             logger.info("compression_stage_3", action="runbook_condensation")
     elif stage == 4:
-        evidence = _truncate_history(evidence, messages, budget)
+        evidence = _truncate_history(evidence, budget)
         logger.info("compression_stage_4", action="message_history_truncation")
     else:
         logger.warning("compression_stage_5", action="forced_conclusion")
-        return evidence, True
+        return evidence, True, []
 
-    return evidence, False
+    return evidence, False, []
 
 
 def _compress_old_evidence(
@@ -69,9 +76,8 @@ def _compress_old_evidence(
         if i < len(evidence) - 2:
             summary = item.get("valueSummary", "")
             short = summary[:100] + "..." if len(summary) > 100 else summary
-            old_len = len(summary)
-            new_len = len(short)
-            budget.compress_evidence(old_len, new_len)
+            budget.evict(summary)
+            budget.add(short)
             compressed.append({**item, "valueSummary": short})
         else:
             compressed.append(item)
@@ -79,19 +85,25 @@ def _compress_old_evidence(
 
 
 def _evict_skill_bodies(loaded_skills: set[str], budget: ContextBudget) -> None:
-    """Remove skill bodies from context tracking."""
-    for _skill in list(loaded_skills):
-        budget.evict_skill(3000)  # approximate skill body size
+    """Remove skill bodies from context tracking.
+
+    Uses a token approximation since the original body text is not retained
+    after injection into the message list.
+    """
+    for _ in loaded_skills:
+        budget.evict_tokens(_APPROX_SKILL_TOKENS)
     loaded_skills.clear()
 
 
 def _truncate_history(
     evidence: list[dict[str, Any]],
-    messages: list[Any],
     budget: ContextBudget,
 ) -> list[dict[str, Any]]:
-    """Collapse intermediate reasoning into a summary."""
-    if len(evidence) > 3:
-        evidence = evidence[-3:]
-        budget.evidence_chars = sum(len(str(e)) for e in evidence)
-    return evidence
+    """Keep only the most recent evidence items, reclaiming budget for the rest."""
+    if len(evidence) <= 3:
+        return evidence
+
+    evicted = evidence[:-3]
+    for item in evicted:
+        budget.evict(item.get("valueSummary", ""))
+    return evidence[-3:]
