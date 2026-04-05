@@ -41,25 +41,17 @@ class IncidentPhase(StrEnum):
     RESOLVED = "Resolved"
     FAILED = "Failed"
     ESCALATED = "Escalated"
-    SUPPRESSED = "Suppressed"
 
 
 class InvestigationPhase(StrEnum):
     PENDING = "Pending"
     IN_PROGRESS = "InProgress"
     COMPLETED = "Completed"
-    TIMED_OUT = "TimedOut"
-    CANCELLED = "Cancelled"
 
 
 class RemediationPlanPhase(StrEnum):
     PROPOSED = "Proposed"
-    APPROVED = "Approved"
-    EXECUTING = "Executing"
-    COMPLETED = "Completed"
     REJECTED = "Rejected"
-    FAILED = "Failed"
-    SUPERSEDED = "Superseded"
 
 
 class ApprovalRequestPhase(StrEnum):

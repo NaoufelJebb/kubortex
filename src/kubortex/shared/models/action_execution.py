@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 from kubortex.shared.types import ActionExecutionPhase, RiskTier
 
 from .incident import Condition, TargetRef
-from .remediation import VerificationMetric
 
 # ---------------------------------------------------------------------------
 # Sub-models
@@ -68,8 +68,6 @@ class ActionExecutionSpec(BaseModel):
     approval_request_ref: str = Field("", alias="approvalRequestRef")
     action: ActionDetail
     approval: ApprovalRecord | None = None
-    verification_metric: VerificationMetric | None = Field(None, alias="verificationMetric")
-    rollback_on_regression: bool = Field(True, alias="rollbackOnRegression")
 
     model_config = {"populate_by_name": True}
 
@@ -78,11 +76,9 @@ class ActionExecutionStatus(BaseModel):
     phase: ActionExecutionPhase = ActionExecutionPhase.APPROVED
     claimed_by: str = Field("", alias="claimedBy")
     claimed_at: datetime | None = Field(None, alias="claimedAt")
-    pre_flight_result: str | None = Field(None, alias="preFlightResult")
-    dry_run_result: str | None = Field(None, alias="dryRunResult")
     executed_at: datetime | None = Field(None, alias="executedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
-    result: str | None = None
+    result: dict[str, Any] | None = None
     error: str | None = None
     verification: VerificationResult = Field(default_factory=VerificationResult)
     rollback: RollbackResult = Field(default_factory=RollbackResult)

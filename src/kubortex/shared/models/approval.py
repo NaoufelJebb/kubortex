@@ -43,6 +43,7 @@ class ApprovalInvestigationContext(BaseModel):
 
 class ApprovalRequestSpec(BaseModel):
     incident_ref: str = Field(alias="incidentRef")
+    investigation_ref: str = Field("", alias="investigationRef")
     remediation_plan_ref: str = Field(alias="remediationPlanRef")
     action: ApprovalActionDetail
     investigation: ApprovalInvestigationContext | None = None

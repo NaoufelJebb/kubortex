@@ -71,9 +71,9 @@ class InvestigationSynopsis(BaseModel):
 
 class IncidentSpec(BaseModel):
     severity: Severity
-    category: Category
+    categories: list[Category] = Field(default_factory=list)
     summary: str
-    source: str = "alertmanager"
+    source: str = ""
     signals: list[Signal] = Field(default_factory=list)
     target_ref: TargetRef | None = Field(None, alias="targetRef")
 

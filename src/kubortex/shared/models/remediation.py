@@ -60,30 +60,13 @@ class PolicyEvaluationResult(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class VerificationMetric(BaseModel):
-    """PromQL-based check used to verify that a remediation action had the intended effect.
-
-    After an action executes, the remediator waits ``check_delay_seconds``
-    then queries ``promql``. If the result exceeds ``success_threshold``
-    the action is considered successful. If the profile has
-    ``rollbackOnRegression=True`` and the metric regresses, a rollback
-    is triggered automatically.
-    """
-
-    promql: str
-    success_threshold: float = Field(alias="successThreshold")
-    check_delay_seconds: int = Field(60, alias="checkDelaySeconds")
-
-    model_config = {"populate_by_name": True}
-
-
 # ---------------------------------------------------------------------------
 # CRD spec & status
 # ---------------------------------------------------------------------------
 
 
 class RemediationPlanSpec(BaseModel):
-    """Spec of a RemediationPlan CRD, as written by the remediator worker.
+    """Spec of a RemediationPlan CRD, as created by the operator from an Investigation result.
 
     ``policy_evaluation`` is populated by the operator after it reads the
     plan — it records the per-action allow/approval decisions before any
@@ -98,7 +81,6 @@ class RemediationPlanSpec(BaseModel):
     policy_evaluation: list[PolicyEvaluationResult] = Field(
         default_factory=list, alias="policyEvaluation"
     )
-    verification_metric: VerificationMetric | None = Field(None, alias="verificationMetric")
 
     model_config = {"populate_by_name": True}
 

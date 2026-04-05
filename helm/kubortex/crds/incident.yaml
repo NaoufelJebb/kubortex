@@ -29,16 +29,19 @@ spec:
                 summary:
                   type: string
                   description: Human-readable summary of the incident.
-                category:
-                  type: string
-                  description: Classified incident category.
-                  enum: [error-rate, latency, availability, resource-saturation, deployment, security, capacity, custom]
+                categories:
+                  type: array
+                  description: Classified incident categories.
+                  items:
+                    type: string
+                    enum: [error-rate, latency, availability, resource-saturation, deployment, security, capacity, custom]
                 severity:
                   type: string
                   description: Incident severity used for prioritization.
                   enum: [info, warning, high, critical]
                 targetRef:
                   type: object
+                  nullable: true
                   description: Kubernetes object primarily affected by the incident.
                   properties:
                     kind:
@@ -60,13 +63,7 @@ spec:
                     type: object
                     description: Raw signal payload captured for the incident.
                     x-kubernetes-preserve-unknown-fields: true
-                labels:
-                  type: object
-                  description: Labels copied onto the incident for filtering and routing.
-                  additionalProperties:
-                    type: string
-                    description: Label value.
-              required: [summary, category, severity, targetRef]
+              required: [summary, severity]
             status:
               type: object
               description: Observed incident lifecycle and controller state.
@@ -94,6 +91,10 @@ spec:
                 maxRetries:
                   type: integer
                   description: Maximum number of retry cycles allowed before escalation.
+                resolvedAt:
+                  type: string
+                  description: RFC3339 time when the incident was resolved.
+                  format: date-time
                 investigation:
                   type: object
                   description: Synopsis of the latest completed investigation.
@@ -117,7 +118,7 @@ spec:
           jsonPath: .status.phase
         - name: Category
           type: string
-          jsonPath: .spec.category
+          jsonPath: .spec.categories[0]
         - name: Severity
           type: string
           jsonPath: .spec.severity

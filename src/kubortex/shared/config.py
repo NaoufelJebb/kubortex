@@ -43,6 +43,7 @@ class EdgeSettings(SharedSettings):
 
     # -- Signal correlation --------------------------------------------------
     correlation_window_seconds: int = 300
+    max_signals_per_incident: int = 200
 
 
 class OperatorSettings(SharedSettings):
@@ -131,8 +132,20 @@ class InvestigatorSettings(SharedSettings):
     skills_dir: str = "skills"
     runbooks_dir: str = "runbooks"
 
-    # -- Context budget ------------------------------------------------------
-    context_max_chars: int = 120_000
+    # -- Context budget (tokens, maps directly to model context window) ------
+    context_max_tokens: int = 30_000
+
+    # -- LLM generation ------------------------------------------------------
+    llm_temperature: float = 0.0
+
+    # -- Graph node limits ---------------------------------------------------
+    evidence_summary_max_chars: int = 2_000
+
+    # -- LLM generation ------------------------------------------------------
+    llm_temperature: float = 0.0
+
+    # -- Graph node limits ---------------------------------------------------
+    evidence_summary_max_chars: int = 2_000
 
 
 class RemediatorSettings(SharedSettings):
