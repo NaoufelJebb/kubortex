@@ -49,7 +49,7 @@ class CordonNodeAction(BaseAction):
         core = k8s_client.CoreV1Api()
         node = await core.read_node(name=target["name"])
         return {
-            "success": bool(node.spec.unschedulable),
+            "improved": bool(node.spec.unschedulable),
             "metric": "node_unschedulable",
             "after": node.spec.unschedulable,
         }
@@ -63,4 +63,4 @@ class CordonNodeAction(BaseAction):
             body={"spec": {"unschedulable": False}},
         )
         logger.info("node_uncordoned", node=target["name"])
-        return {"rolledBack": True, "node": target["name"]}
+        return {"triggered": True, "node": target["name"]}

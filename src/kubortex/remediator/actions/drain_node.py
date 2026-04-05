@@ -44,6 +44,10 @@ class DrainNodeAction(BaseAction):
     async def execute(self, target: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
         core = k8s_client.CoreV1Api()
 
+        # Capture schedulability state before we touch anything
+        node = await core.read_node(name=target["name"])
+        was_already_cordoned = bool(node.spec.unschedulable)
+
         # Cordon first
         await core.patch_node(
             name=target["name"],
@@ -84,7 +88,7 @@ class DrainNodeAction(BaseAction):
             "node": target["name"],
             "evicted": evicted,
             "failed": failed,
-            "wasCordoned": True,
+            "wasAlreadyCordoned": was_already_cordoned,
         }
 
     async def verify(
@@ -104,22 +108,35 @@ class DrainNodeAction(BaseAction):
             )
             non_ds = [p for p in pods.items if not _is_daemonset_pod(p) and not _is_mirror_pod(p)]
             if not non_ds:
-                return {"success": True, "metric": "pods_remaining", "after": 0}
+                return {"improved": True, "metric": "pods_remaining", "after": 0}
 
         remaining = len(non_ds)
-        return {"success": False, "metric": "pods_remaining", "after": remaining}
+        return {"improved": False, "metric": "pods_remaining", "after": remaining}
 
     async def rollback(
         self, target: dict[str, Any], parameters: dict[str, Any], execution_result: dict[str, Any]
     ) -> dict[str, Any]:
         core = k8s_client.CoreV1Api()
-        # Uncordon the node — evicted pods can't be un-evicted
-        await core.patch_node(
-            name=target["name"],
-            body={"spec": {"unschedulable": False}},
-        )
-        logger.info("node_uncordoned_after_drain_rollback", node=target["name"])
-        return {"rolledBack": True, "uncordoned": True, "note": "Evicted pods cannot be restored"}
+        was_already_cordoned = execution_result.get("wasAlreadyCordoned", False)
+        if not was_already_cordoned:
+            # Only uncordon if we cordoned it — don't alter pre-existing state
+            await core.patch_node(
+                name=target["name"],
+                body={"spec": {"unschedulable": False}},
+            )
+            logger.info("node_uncordoned_after_drain_rollback", node=target["name"])
+            return {
+                "triggered": True,
+                "uncordoned": True,
+                "note": "Evicted pods cannot be restored",
+            }
+        else:
+            logger.info("node_left_cordoned_after_drain_rollback", node=target["name"])
+            return {
+                "triggered": True,
+                "uncordoned": False,
+                "note": "Node was already cordoned before drain; left cordoned. Evicted pods cannot be restored",
+            }
 
 
 def _is_daemonset_pod(pod: Any) -> bool:

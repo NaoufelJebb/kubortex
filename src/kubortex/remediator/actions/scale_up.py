@@ -106,7 +106,7 @@ class ScaleUpAction(BaseAction):
 
                 if ready >= desired:
                     return {
-                        "success": True,
+                        "improved": True,
                         "metric": "ready_replicas",
                         "before": execution_result["originalReplicas"],
                         "after": ready,
@@ -115,7 +115,7 @@ class ScaleUpAction(BaseAction):
                 pass
 
         return {
-            "success": False,
+            "improved": False,
             "metric": "ready_replicas",
             "reason": "Timeout waiting for replicas",
         }
@@ -140,4 +140,4 @@ class ScaleUpAction(BaseAction):
             )
 
         logger.info("scale_rolled_back", target=target["name"], replicas=original)
-        return {"rolledBack": True, "restoredReplicas": original}
+        return {"triggered": True, "restoredReplicas": original}

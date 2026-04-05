@@ -22,7 +22,9 @@ class RollbackDeploymentAction(BaseAction):
                 name=target["name"], namespace=target["namespace"]
             )
             # Verify the deployment exists and has history
-            revision = dep.metadata.annotations.get("deployment.kubernetes.io/revision", "0")
+            revision = (dep.metadata.annotations or {}).get(
+                "deployment.kubernetes.io/revision", "0"
+            )
             if int(revision) < 2:
                 logger.warning("no_previous_revision", deployment=target["name"])
                 return False
@@ -41,13 +43,14 @@ class RollbackDeploymentAction(BaseAction):
     async def execute(self, target: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
         apps = k8s_client.AppsV1Api()
 
-        # Read current deployment to capture state
+        # Read current deployment to capture full container list for potential rollback
         dep = await apps.read_namespaced_deployment(
             name=target["name"], namespace=target["namespace"]
         )
-        current_image = ""
-        if dep.spec.template.spec.containers:
-            current_image = dep.spec.template.spec.containers[0].image
+        previous_containers = [
+            {"name": c.name, "image": c.image}
+            for c in dep.spec.template.spec.containers
+        ]
 
         # Get the target revision's ReplicaSet
         revision = parameters.get("revision")
@@ -80,13 +83,14 @@ class RollbackDeploymentAction(BaseAction):
                 target_rs = sorted_rs[1]
 
         if not target_rs:
-            return {"success": False, "error": "Could not find target revision ReplicaSet"}
+            return {"improved": False, "error": "Could not find target revision ReplicaSet"}
 
-        # Patch the deployment with the old template
-        rollback_image = ""
-        if target_rs.spec.template.spec.containers:
-            rollback_image = target_rs.spec.template.spec.containers[0].image
+        rolled_back_containers = [
+            {"name": c.name, "image": c.image}
+            for c in target_rs.spec.template.spec.containers
+        ]
 
+        # Patch the deployment with the old template (preserves all containers)
         await apps.patch_namespaced_deployment(
             name=target["name"],
             namespace=target["namespace"],
@@ -96,12 +100,12 @@ class RollbackDeploymentAction(BaseAction):
         logger.info(
             "deployment_rolled_back",
             deployment=target["name"],
-            from_image=current_image,
-            to_image=rollback_image,
+            from_images=[c["image"] for c in previous_containers],
+            to_images=[c["image"] for c in rolled_back_containers],
         )
         return {
-            "previousImage": current_image,
-            "rolledBackImage": rollback_image,
+            "previousContainers": previous_containers,
+            "rolledBackContainers": rolled_back_containers,
         }
 
     async def verify(
@@ -118,22 +122,22 @@ class RollbackDeploymentAction(BaseAction):
             c.type == "Progressing" and c.status == "True" for c in (dep.status.conditions or [])
         )
 
-        success = available >= desired and not progressing
+        improved = available >= desired and not progressing
         return {
-            "success": success,
+            "improved": improved,
             "metric": "deployment_available",
-            "before": execution_result.get("previousImage"),
-            "after": execution_result.get("rolledBackImage"),
+            "before": execution_result.get("previousContainers"),
+            "after": execution_result.get("rolledBackContainers"),
         }
 
     async def rollback(
         self, target: dict[str, Any], parameters: dict[str, Any], execution_result: dict[str, Any]
     ) -> dict[str, Any]:
-        # Rollback of a rollback = re-apply the original image
+        # Rollback of a rollback = re-apply the original containers
         apps = k8s_client.AppsV1Api()
-        original_image = execution_result.get("previousImage")
-        if not original_image:
-            return {"rolledBack": False, "reason": "No original image recorded"}
+        previous_containers = execution_result.get("previousContainers", [])
+        if not previous_containers:
+            return {"triggered": False, "reason": "No original containers recorded"}
 
         await apps.patch_namespaced_deployment(
             name=target["name"],
@@ -141,10 +145,14 @@ class RollbackDeploymentAction(BaseAction):
             body={
                 "spec": {
                     "template": {
-                        "spec": {"containers": [{"name": target["name"], "image": original_image}]}
+                        "spec": {"containers": previous_containers}
                     }
                 }
             },
         )
-        logger.info("rollback_reversed", deployment=target["name"], image=original_image)
-        return {"rolledBack": True, "restoredImage": original_image}
+        logger.info(
+            "rollback_reversed",
+            deployment=target["name"],
+            images=[c["image"] for c in previous_containers],
+        )
+        return {"triggered": True, "restoredContainers": previous_containers}

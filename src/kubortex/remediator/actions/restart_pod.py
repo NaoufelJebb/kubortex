@@ -39,6 +39,13 @@ class RestartPodAction(BaseAction):
 
     async def execute(self, target: dict[str, Any], parameters: dict[str, Any]) -> dict[str, Any]:
         core = k8s_client.CoreV1Api()
+
+        # Read pod labels before deletion so verify() can find the replacement
+        pod = await core.read_namespaced_pod(
+            name=target["name"], namespace=target["namespace"]
+        )
+        pod_labels = pod.metadata.labels or {}
+
         grace = parameters.get("gracePeriodSeconds", 30)
         await core.delete_namespaced_pod(
             name=target["name"],
@@ -46,7 +53,7 @@ class RestartPodAction(BaseAction):
             grace_period_seconds=grace,
         )
         logger.info("pod_deleted", pod=target["name"], namespace=target["namespace"])
-        return {"deleted": target["name"], "gracePeriod": grace}
+        return {"deleted": target["name"], "gracePeriod": grace, "podLabels": pod_labels}
 
     async def verify(
         self, target: dict[str, Any], parameters: dict[str, Any], execution_result: dict[str, Any]
@@ -57,30 +64,39 @@ class RestartPodAction(BaseAction):
         interval = 5
         elapsed = 0
 
+        # Build a selector scoped to the deleted pod's labels
+        pod_labels = execution_result.get("podLabels", {})
+        label_selector = parameters.get("labelSelector", "")
+        if not label_selector and pod_labels:
+            label_selector = ",".join(f"{k}={v}" for k, v in pod_labels.items())
+
+        deleted_name = execution_result.get("deleted", "")
+
         while elapsed < timeout:
             await asyncio.sleep(interval)
             elapsed += interval
             try:
                 pods = await core.list_namespaced_pod(
                     namespace=target["namespace"],
-                    label_selector=parameters.get("labelSelector", ""),
+                    label_selector=label_selector,
                 )
                 ready_pods = [
                     p
                     for p in pods.items
-                    if p.status.phase == "Running"
+                    if p.metadata.name != deleted_name  # original pod must be gone
+                    and p.status.phase == "Running"
                     and all(c.ready for c in (p.status.container_statuses or []))
                 ]
                 if ready_pods:
                     new_name = ready_pods[0].metadata.name
-                    return {"success": True, "metric": "pod_ready", "newPod": new_name}
+                    return {"improved": True, "metric": "pod_ready", "newPod": new_name}
             except k8s_client.ApiException:
                 pass
 
-        return {"success": False, "metric": "pod_ready", "reason": "Timeout waiting for ready pod"}
+        return {"improved": False, "metric": "pod_ready", "reason": "Timeout waiting for ready pod"}
 
     async def rollback(
         self, target: dict[str, Any], parameters: dict[str, Any], execution_result: dict[str, Any]
     ) -> dict[str, Any]:
         # Pod restart is not directly reversible — escalate
-        return {"rolledBack": False, "reason": "Pod restart cannot be reversed; escalation needed"}
+        return {"triggered": False, "reason": "Pod restart cannot be reversed; escalation needed"}

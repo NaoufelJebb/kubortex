@@ -13,7 +13,7 @@ import structlog
 
 from kubortex.remediator.actions.registry import get_action
 from kubortex.shared.config import RemediatorSettings
-from kubortex.shared.k8s import list_resources, patch_status, try_claim
+from kubortex.shared.crds import list_resources, patch_status, try_claim
 
 logger = structlog.get_logger(__name__)
 
@@ -40,7 +40,7 @@ class RemediatorWorker:
             await asyncio.sleep(self._settings.poll_interval_seconds)
 
     async def _poll_and_process(self) -> None:
-        """Find Approved ActionExecutions, claim one, and run it."""
+        """Find Approved ActionExecutions, claim all available, and run them concurrently."""
         executions = await list_resources("actionexecutions")
         approved = [
             ae
@@ -52,12 +52,15 @@ class RemediatorWorker:
         if not approved:
             return
 
+        tasks = []
         for ae in approved:
             name = ae["metadata"]["name"]
             claimed = await try_claim("actionexecutions", name, self._settings.pod_name)
             if claimed:
-                await self._run_action(ae)
-                break
+                tasks.append(self._run_action(ae))
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _run_action(self, ae: dict[str, Any]) -> None:
         """Execute the full pre_flight → dry_run → execute → verify pipeline."""
@@ -77,7 +80,7 @@ class RemediatorWorker:
                 "actionexecutions",
                 name,
                 {
-                    "phase": "Failed",
+                    "result": {"improved": False},
                     "error": f"Unknown action type: {action_type}",
                 },
             )
@@ -91,16 +94,13 @@ class RemediatorWorker:
                     "actionexecutions",
                     name,
                     {
-                        "phase": "Failed",
+                        "result": {"improved": False},
                         "error": "Pre-flight check failed",
                     },
                 )
                 return
 
-            # Transition to Executing
-            await patch_status("actionexecutions", name, {"phase": "Executing"})
-
-            # Dry-run
+            # Dry-run (informational only — result not persisted)
             dry_result = await action.dry_run(target, parameters)
             logger.info("dry_run_complete", name=name, result=dry_result)
 
@@ -110,12 +110,11 @@ class RemediatorWorker:
             # Verify
             verification = await action.verify(target, parameters, exec_result)
 
-            if verification.get("success"):
+            if verification.get("improved"):
                 await patch_status(
                     "actionexecutions",
                     name,
                     {
-                        "phase": "Succeeded",
                         "result": exec_result,
                         "verification": verification,
                     },
@@ -130,10 +129,9 @@ class RemediatorWorker:
                     "actionexecutions",
                     name,
                     {
-                        "phase": "RolledBack",
                         "result": exec_result,
                         "verification": verification,
-                        "rollback": rollback_result,
+                        "rollback": {"triggered": True, **rollback_result},
                     },
                 )
                 logger.info("action_rolled_back", name=name)
@@ -144,7 +142,7 @@ class RemediatorWorker:
                 "actionexecutions",
                 name,
                 {
-                    "phase": "Failed",
+                    "result": {"improved": False},
                     "error": "Internal remediator error",
                 },
             )
