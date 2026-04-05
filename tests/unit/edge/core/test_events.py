@@ -1,4 +1,4 @@
-"""Unit tests for kubortex.edge.notifications.events (domain event models)."""
+"""Unit tests for kubortex.edge.core.events (notification event models)."""
 
 from __future__ import annotations
 
@@ -7,14 +7,17 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from kubortex.edge.notifications.events import (
+from kubortex.edge.core.events import (
     ActionExecuted,
     ActionFailed,
     ActionSucceeded,
+    ApprovalRejected,
     ApprovalRequired,
+    ApprovalTimedOut,
     DomainEvent,
     EscalationTriggered,
     IncidentDetected,
+    IncidentFailed,
     IncidentResolved,
     InvestigationCompleted,
     InvestigationStarted,
@@ -50,9 +53,7 @@ class TestDomainEvent:
             DomainEvent(incidentName="x", namespace="y", timestamp=_NOW)
 
     def test_payload_defaults_to_empty_dict(self) -> None:
-        ev = DomainEvent(
-            eventType="Custom", incidentName="x", namespace="y", timestamp=_NOW
-        )
+        ev = DomainEvent(eventType="Custom", incidentName="x", namespace="y", timestamp=_NOW)
         assert ev.payload == {}
 
     def test_populate_by_name_works(self) -> None:
@@ -81,9 +82,12 @@ class TestEventTypeDefaults:
             (InvestigationCompleted, "InvestigationCompleted"),
             (RemediationPlanned, "RemediationPlanned"),
             (ApprovalRequired, "ApprovalRequired"),
+            (ApprovalRejected, "ApprovalRejected"),
+            (ApprovalTimedOut, "ApprovalTimedOut"),
             (ActionExecuted, "ActionExecuted"),
             (ActionSucceeded, "ActionSucceeded"),
             (ActionFailed, "ActionFailed"),
+            (IncidentFailed, "IncidentFailed"),
             (IncidentResolved, "IncidentResolved"),
             (EscalationTriggered, "EscalationTriggered"),
         ],

@@ -1,4 +1,4 @@
-"""Unit tests for kubortex.edge.notifications.projector.EventProjector."""
+"""Unit tests for kubortex.edge.core.projector.EventProjector."""
 
 from __future__ import annotations
 
@@ -10,19 +10,22 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from kubortex.edge.notifications.events import (
+from kubortex.edge.core.events import (
     ActionExecuted,
     ActionFailed,
     ActionSucceeded,
+    ApprovalRejected,
     ApprovalRequired,
+    ApprovalTimedOut,
     EscalationTriggered,
     IncidentDetected,
+    IncidentFailed,
     IncidentResolved,
     InvestigationCompleted,
     InvestigationStarted,
     RemediationPlanned,
 )
-from kubortex.edge.notifications.projector import EventProjector
+from kubortex.edge.core.projector import EventProjector
 from kubortex.shared.config import EdgeSettings
 
 # ---------------------------------------------------------------------------
@@ -43,6 +46,8 @@ def _make_obj(
     phase: str = "Detected",
     incident_name_in_spec: str | None = None,
     owner_incident: str | None = None,
+    spec: dict | None = None,
+    status: dict | None = None,
 ) -> dict:
     obj: dict = {
         "metadata": {
@@ -50,12 +55,13 @@ def _make_obj(
             "name": name,
             "namespace": namespace,
             "ownerReferences": [],
+            "resourceVersion": "1",
         },
-        "spec": {},
-        "status": {"phase": phase},
+        "spec": spec or {},
+        "status": status or {"phase": phase},
     }
     if incident_name_in_spec:
-        obj["spec"]["incidentRef"] = {"name": incident_name_in_spec}
+        obj["spec"]["incidentRef"] = incident_name_in_spec
     if owner_incident:
         obj["metadata"]["ownerReferences"].append({"kind": "Incident", "name": owner_incident})
     return obj
@@ -89,6 +95,11 @@ class TestProject:
         obj = _make_obj(uid="uid-1", phase="UnknownPhase")
         assert projector._project("incidents", obj) is None
 
+    def test_remediation_planned_maps_from_incident_phase(self, projector: EventProjector) -> None:
+        obj = _make_obj(uid="uid-1", phase="RemediationPlanned")
+        event = projector._project("incidents", obj)
+        assert isinstance(event, RemediationPlanned)
+
     def test_event_carries_correct_incident_name(self, projector: EventProjector) -> None:
         obj = _make_obj(uid="uid-1", name="my-incident", phase="Detected")
         event = projector._project("incidents", obj)
@@ -108,6 +119,59 @@ class TestProject:
         assert event.payload["resourceName"] == "my-incident"
         assert event.payload["phase"] == "Detected"
 
+    def test_incident_payload_is_enriched(self, projector: EventProjector) -> None:
+        obj = _make_obj(
+            uid="uid-1",
+            name="inc-001",
+            phase="Detected",
+            spec={
+                "summary": "CPU high",
+                "severity": "critical",
+                "categories": ["resource-saturation"],
+                "targetRef": {"kind": "Deployment", "namespace": "prod", "name": "api"},
+            },
+        )
+        event = projector._project("incidents", obj)
+        assert event is not None
+        assert event.payload["summary"] == "CPU high"
+        assert event.payload["severity"] == "critical"
+        assert event.payload["category"] == "resource-saturation"
+        assert event.payload["targetName"] == "api"
+
+    def test_investigation_payload_uses_string_incident_ref(
+        self, projector: EventProjector
+    ) -> None:
+        obj = _make_obj(
+            uid="uid-1",
+            name="inv-001",
+            phase="Completed",
+            incident_name_in_spec="inc-001",
+            spec={
+                "incidentRef": "inc-001",
+                "summary": "CPU high",
+                "severity": "critical",
+                "category": "resource-saturation",
+            },
+            status={
+                "phase": "Completed",
+                "result": {
+                    "hypothesis": "CPU throttling",
+                    "confidence": 0.91,
+                    "evidence": [{"skill": "prometheus"}],
+                    "recommendedActions": [{"type": "scale-up"}],
+                },
+            },
+        )
+        event = projector._project("investigations", obj)
+        assert isinstance(event, InvestigationCompleted)
+        assert event.incident_name == "inc-001"
+        assert event.payload["confidence"] == 0.91
+        assert event.payload["hypothesis"] == "CPU throttling"
+        assert event.payload["proposedActionCount"] == 1
+
+    def test_invalid_object_shape_is_skipped(self, projector: EventProjector) -> None:
+        assert projector._project("incidents", {"metadata": [], "status": {}}) is None
+
 
 # ---------------------------------------------------------------------------
 # _map_event — full mapping table
@@ -126,15 +190,19 @@ class TestMapEvent:
         ("plural", "phase", "expected_cls"),
         [
             ("incidents", "Detected", IncidentDetected),
+            ("incidents", "RemediationPlanned", RemediationPlanned),
+            ("incidents", "Failed", IncidentFailed),
             ("incidents", "Resolved", IncidentResolved),
             ("incidents", "Escalated", EscalationTriggered),
             ("investigations", "InProgress", InvestigationStarted),
             ("investigations", "Completed", InvestigationCompleted),
-            ("remediationplans", "PendingApproval", RemediationPlanned),
             ("approvalrequests", "Pending", ApprovalRequired),
+            ("approvalrequests", "Rejected", ApprovalRejected),
+            ("approvalrequests", "TimedOut", ApprovalTimedOut),
             ("actionexecutions", "Executing", ActionExecuted),
             ("actionexecutions", "Succeeded", ActionSucceeded),
             ("actionexecutions", "Failed", ActionFailed),
+            ("actionexecutions", "RolledBack", ActionFailed),
         ],
     )
     def test_known_mapping(
@@ -168,6 +236,10 @@ class TestResolveIncidentName:
         obj = _make_obj(owner_incident="owner-incident")
         assert projector._resolve_incident_name("investigations", obj) == "owner-incident"
 
+    def test_dict_incident_ref_is_not_accepted(self, projector: EventProjector) -> None:
+        obj = _make_obj(spec={"incidentRef": {"name": "legacy-shape"}})
+        assert projector._resolve_incident_name("investigations", obj) == "unknown"
+
     def test_child_resource_with_no_ref_returns_unknown(self, projector: EventProjector) -> None:
         obj = _make_obj()
         assert projector._resolve_incident_name("investigations", obj) == "unknown"
@@ -175,9 +247,48 @@ class TestResolveIncidentName:
 
 class TestWatchResource:
     @pytest.mark.asyncio
-    async def test_emits_only_added_or_modified_events(
+    async def test_priming_skips_initial_snapshot_replay(
         self, projector: EventProjector, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        existing = _make_obj(uid="uid-1", phase="Detected")
+
+        async def fake_list_namespaced_custom_object(**_kwargs):
+            return {"items": [existing], "metadata": {"resourceVersion": "10"}}
+
+        class FakeWatch:
+            def stream(self, *_args, **_kwargs):
+                async def gen():
+                    yield {"type": "ADDED", "object": existing}
+                    yield {
+                        "type": "MODIFIED",
+                        "object": _make_obj(uid="uid-1", phase="Resolved"),
+                    }
+
+                return gen()
+
+        monkeypatch.setattr("kubortex.edge.core.projector.watch.Watch", FakeWatch)
+
+        api = SimpleNamespace(list_namespaced_custom_object=fake_list_namespaced_custom_object)
+        resource_version = await projector._initialize_resource_watch_state(
+            api,
+            projector._settings,
+            "incidents",
+        )
+        event = await asyncio.wait_for(
+            anext(
+                projector._watch_resource(api, projector._settings, "incidents", resource_version)
+            ),
+            timeout=1,
+        )
+
+        assert isinstance(event, IncidentResolved)
+
+    @pytest.mark.asyncio
+    async def test_deleted_event_prunes_seen_phase_cache(
+        self, projector: EventProjector, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        projector._seen_phases["ignored"] = "Detected"
+
         class FakeWatch:
             def stream(self, *_args, **_kwargs):
                 async def gen():
@@ -186,7 +297,7 @@ class TestWatchResource:
 
                 return gen()
 
-        monkeypatch.setattr("kubortex.edge.notifications.projector.watch.Watch", FakeWatch)
+        monkeypatch.setattr("kubortex.edge.core.projector.watch.Watch", FakeWatch)
 
         api = SimpleNamespace(list_namespaced_custom_object=object())
         event = await asyncio.wait_for(
@@ -195,12 +306,16 @@ class TestWatchResource:
         )
 
         assert isinstance(event, IncidentDetected)
+        assert "ignored" not in projector._seen_phases
 
     @pytest.mark.asyncio
     async def test_retries_after_watch_error(
         self, projector: EventProjector, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         sleep = AsyncMock()
+
+        async def fake_list_namespaced_custom_object(**_kwargs):
+            return {"items": [], "metadata": {"resourceVersion": "10"}}
 
         class FakeWatch:
             calls = 0
@@ -214,10 +329,10 @@ class TestWatchResource:
 
                 return gen()
 
-        monkeypatch.setattr("kubortex.edge.notifications.projector.watch.Watch", FakeWatch)
-        monkeypatch.setattr("kubortex.edge.notifications.projector.asyncio.sleep", sleep)
+        monkeypatch.setattr("kubortex.edge.core.projector.watch.Watch", FakeWatch)
+        monkeypatch.setattr("kubortex.edge.core.projector.asyncio.sleep", sleep)
 
-        api = SimpleNamespace(list_namespaced_custom_object=object())
+        api = SimpleNamespace(list_namespaced_custom_object=fake_list_namespaced_custom_object)
         event = await asyncio.wait_for(
             anext(projector._watch_resource(api, projector._settings, "incidents")),
             timeout=1,
@@ -232,7 +347,10 @@ class TestWatchEvents:
     async def test_yields_events_from_concurrent_resource_watchers(
         self, projector: EventProjector, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        async def fake_watch_resource(_api, _settings, plural: str):
+        async def fake_prime(_api, _settings, _plural: str):
+            return "10"
+
+        async def fake_watch_resource(_api, _settings, plural: str, _resource_version: str | None):
             if plural == "incidents":
                 yield IncidentDetected(
                     incidentName="inc-001",
@@ -246,9 +364,10 @@ class TestWatchEvents:
             yield  # pragma: no cover
 
         monkeypatch.setattr(
-            "kubortex.edge.notifications.projector.k8s_client.CustomObjectsApi",
+            "kubortex.edge.core.projector.k8s_client.CustomObjectsApi",
             lambda: object(),
         )
+        monkeypatch.setattr(projector, "_initialize_resource_watch_state", fake_prime)
         monkeypatch.setattr(projector, "_watch_resource", fake_watch_resource)
 
         stream = projector.watch_events()
@@ -257,3 +376,4 @@ class TestWatchEvents:
 
         assert isinstance(event, IncidentDetected)
         assert event.incident_name == "inc-001"
+        assert projector.is_ready is False

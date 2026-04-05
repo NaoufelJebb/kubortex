@@ -7,14 +7,17 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from kubortex.edge.notifications import slack as slack_module
-from kubortex.edge.notifications.events import (
+from kubortex.edge.core.events import (
     ActionFailed,
+    ApprovalRejected,
+    ApprovalTimedOut,
     EscalationTriggered,
     IncidentDetected,
+    IncidentFailed,
     IncidentResolved,
     InvestigationStarted,
 )
+from kubortex.edge.notifications import slack as slack_module
 from kubortex.edge.notifications.slack import SafeFormatDict, SlackNotifier
 from kubortex.shared.config import EdgeSettings
 
@@ -103,7 +106,7 @@ class TestRender:
         assert text.startswith(":rotating_light:")
 
     def test_unknown_event_type_falls_back_to_generic(self, n: SlackNotifier) -> None:
-        from kubortex.edge.notifications.events import DomainEvent
+        from kubortex.edge.core.events import DomainEvent
 
         event = DomainEvent(
             eventType="MyCustomEvent", incidentName="inc-001", namespace="default", timestamp=_NOW
@@ -113,11 +116,14 @@ class TestRender:
         assert "inc-001" in text
 
     def test_missing_format_placeholder_does_not_raise(self, n: SlackNotifier) -> None:
-        # IncidentDetected template expects {summary}, {severity}, {category}
-        # Pass event with empty payload — SafeFormatDict should fill <key>
+        # IncidentDetected template expects summary/severity/category.
+        # With an empty payload, Slack should fall back to the incident name and
+        # generic labels instead of rendering placeholders.
         event = _make_event(IncidentDetected)
         text = n._render(event)
-        assert "<summary>" in text or ":rotating_light:" in text
+        assert text == (
+            ":rotating_light: Incident detected: *inc-001*\nSeverity: unknown | Category: unknown"
+        )
 
     def test_incident_resolved_uses_incident_name(self, n: SlackNotifier) -> None:
         event = _make_event(IncidentResolved)
@@ -125,9 +131,29 @@ class TestRender:
         assert "inc-001" in text
 
     def test_action_failed_renders_resource_name(self, n: SlackNotifier) -> None:
-        event = _make_event(ActionFailed, resourceName="restart-pod")
+        event = _make_event(ActionFailed, actionType="restart-pod", targetName="api")
         text = n._render(event)
-        assert "restart-pod" in text
+        assert text == ":x: Action failed for `restart-pod` on `api`"
+
+    def test_approval_rejected_renders_action_context(self, n: SlackNotifier) -> None:
+        event = _make_event(ApprovalRejected, actionType="restart-pod", targetName="api")
+        text = n._render(event)
+        assert text == ":no_entry_sign: Approval rejected for `restart-pod` on `api`"
+
+    def test_approval_timed_out_renders_action_context(self, n: SlackNotifier) -> None:
+        event = _make_event(ApprovalTimedOut, actionType="restart-pod", targetName="api")
+        text = n._render(event)
+        assert text == ":alarm_clock: Approval timed out for `restart-pod` on `api`"
+
+    def test_incident_failed_uses_summary_fallback(self, n: SlackNotifier) -> None:
+        event = _make_event(IncidentFailed)
+        text = n._render(event)
+        assert text == ":warning: Incident retry triggered: *inc-001*"
+
+    def test_render_context_applies_fallbacks(self, n: SlackNotifier) -> None:
+        context = n._build_render_context(_make_event(IncidentDetected))
+        assert context["summary"] == "inc-001"
+        assert context["severity"] == "unknown"
 
     def test_malformed_template_falls_back_to_generic_message(
         self, n: SlackNotifier, monkeypatch: pytest.MonkeyPatch
@@ -166,7 +192,7 @@ class TestSend:
         call_kwargs = mock_slack_client.chat_postMessage.await_args.kwargs
         assert call_kwargs["channel"] == "#oncall"
         assert call_kwargs["thread_ts"] is None
-        assert call_kwargs["text"] == ":mag: Investigation started for `<resourceName>`"
+        assert call_kwargs["text"] == ":mag: Investigation started for *inc-001*"
 
     @pytest.mark.asyncio
     async def test_escalation_sends_to_escalation_channel(
@@ -182,17 +208,29 @@ class TestSend:
     ) -> None:
         mock_slack_client.chat_postMessage.return_value = {"ok": True, "ts": "999.000"}
         await notifier.send(_make_event(IncidentDetected))
-        assert notifier._threads.get("inc-001") == "999.000"
+        assert notifier._threads.get(("#oncall", "inc-001")) == "999.000"
 
     @pytest.mark.asyncio
     async def test_follow_up_event_uses_thread_ts(
         self, notifier: SlackNotifier, mock_slack_client: AsyncMock
     ) -> None:
         # Seed the thread
-        notifier._threads["inc-001"] = "999.000"
+        notifier._threads[("#oncall", "inc-001")] = "999.000"
         await notifier.send(_make_event(InvestigationStarted))
         call_kwargs = mock_slack_client.chat_postMessage.await_args.kwargs
         assert call_kwargs["thread_ts"] == "999.000"
+
+    @pytest.mark.asyncio
+    async def test_escalation_does_not_reuse_main_channel_thread(
+        self, notifier: SlackNotifier, mock_slack_client: AsyncMock
+    ) -> None:
+        notifier._threads[("#oncall", "inc-001")] = "999.000"
+
+        await notifier.send(_make_event(EscalationTriggered))
+
+        call_kwargs = mock_slack_client.chat_postMessage.await_args.kwargs
+        assert call_kwargs["channel"] == "#escalations"
+        assert call_kwargs["thread_ts"] is None
 
     @pytest.mark.asyncio
     async def test_slack_error_is_swallowed(
@@ -208,7 +246,7 @@ class TestSend:
     ) -> None:
         mock_slack_client.chat_postMessage.return_value = {"ok": False}
         await notifier.send(_make_event(IncidentDetected))
-        assert "inc-001" not in notifier._threads
+        assert ("#oncall", "inc-001") not in notifier._threads
 
     @pytest.mark.asyncio
     async def test_non_detection_event_does_not_create_thread(
@@ -226,4 +264,4 @@ class TestSend:
     ) -> None:
         mock_slack_client.chat_postMessage.return_value = {"ok": True, "ts": ""}
         await notifier.send(_make_event(IncidentDetected))
-        assert "inc-001" not in notifier._threads
+        assert ("#oncall", "inc-001") not in notifier._threads

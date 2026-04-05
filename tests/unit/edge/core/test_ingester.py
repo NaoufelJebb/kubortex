@@ -1,18 +1,18 @@
-"""Unit tests for kubortex.edge.signals.ingester (SignalSource Protocol + SignalIngester)."""
+"""Unit tests for kubortex.edge.core.ingester."""
 
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
 
+from kubortex.edge.core.ingester import SignalIngester, SignalSource
 from kubortex.edge.signals.alertmanager import AlertmanagerSource
-from kubortex.edge.signals.ingester import SignalIngester, SignalSource
 from kubortex.shared.config import EdgeSettings
 from kubortex.shared.models.incident import Signal, TargetRef
-from kubortex.shared.types import Category, Severity
+from kubortex.shared.types import Category
 
 from ..conftest import make_signal, make_target_ref
 
@@ -27,6 +27,7 @@ class _FakeSource:
     """Minimal SignalSource implementation for testing."""
 
     path: str = "/api/v1/fake"
+    source_name: str = "fake"
 
     def __init__(self, signals: list[tuple[Signal, Category, TargetRef | None]] | None = None):
         self._signals = signals or []
@@ -111,7 +112,7 @@ class TestRegister:
 @pytest.fixture()
 def _mock_correlate(monkeypatch) -> AsyncMock:
     mock = AsyncMock(return_value="inc-test-001")
-    monkeypatch.setattr("kubortex.edge.signals.ingester.correlate_and_upsert", mock)
+    monkeypatch.setattr("kubortex.edge.core.ingester.correlate_and_upsert", mock)
     return mock
 
 
@@ -167,6 +168,21 @@ class TestHandler:
         client.post("/api/v1/fake", json={})
         assert _mock_correlate.await_count == 2
 
+    def test_signals_same_name_but_different_kind_produce_multiple_correlate_calls(
+        self, _mock_correlate
+    ) -> None:
+        deployment = make_target_ref(kind="Deployment", name="api")
+        statefulset = make_target_ref(kind="StatefulSet", name="api")
+        parsed = [
+            (make_signal(), Category.RESOURCE_SATURATION, deployment),
+            (make_signal(), Category.RESOURCE_SATURATION, statefulset),
+        ]
+
+        client = self._client(_FakeSource(signals=parsed))
+        client.post("/api/v1/fake", json={})
+
+        assert _mock_correlate.await_count == 2
+
     def test_namespace_forwarded_to_correlate(self, _mock_correlate) -> None:
         parsed = _make_parsed(n=1)
         client = self._client(_FakeSource(signals=parsed))
@@ -179,4 +195,40 @@ class TestHandler:
         client = self._client(_FakeSource(signals=parsed))
         resp = client.post("/api/v1/fake", json={})
         assert resp.status_code == 200
+        _mock_correlate.assert_awaited_once()
+
+    def test_invalid_json_body_returns_400(self, _mock_correlate) -> None:
+        client = self._client(_FakeSource(signals=[]))
+        resp = client.post(
+            "/api/v1/fake", content="{", headers={"content-type": "application/json"}
+        )
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": "request body must be valid JSON"}
+
+    def test_non_object_json_body_returns_400(self, _mock_correlate) -> None:
+        client = self._client(_FakeSource(signals=[]))
+        resp = client.post("/api/v1/fake", json=[])
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": "request body must be a JSON object"}
+
+    def test_parse_value_error_returns_400(self, _mock_correlate) -> None:
+        class _BrokenSource:
+            path = "/api/v1/broken"
+
+            async def parse(self, payload):
+                raise ValueError("bad payload")
+
+        client = self._client(_BrokenSource())
+        resp = client.post("/api/v1/broken", json={})
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": "bad payload"}
+
+    def test_request_path_does_not_preload_incident_index(
+        self,
+        _mock_correlate,
+        monkeypatch,
+    ) -> None:
+        parsed = _make_parsed(n=2)
+        client = self._client(_FakeSource(signals=parsed))
+        client.post("/api/v1/fake", json={})
         _mock_correlate.assert_awaited_once()

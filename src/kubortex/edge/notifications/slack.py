@@ -13,7 +13,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 
 from kubortex.shared.config import EdgeSettings
 
-from .events import DomainEvent
+from kubortex.edge.core.events import DomainEvent
 
 logger = structlog.get_logger(__name__)
 
@@ -23,7 +23,7 @@ _TEMPLATES: dict[str, tuple[str, str]] = {
         ":rotating_light:",
         "Incident detected: *{summary}*\nSeverity: {severity} | Category: {category}",
     ),
-    "InvestigationStarted": (":mag:", "Investigation started for `{resourceName}`"),
+    "InvestigationStarted": (":mag:", "Investigation started for *{summary}*"),
     "InvestigationCompleted": (
         ":white_check_mark:",
         "Investigation completed — confidence: {confidence}",
@@ -32,7 +32,10 @@ _TEMPLATES: dict[str, tuple[str, str]] = {
     "ApprovalRequired": (":raised_hand:", "Approval required for action: `{resourceName}`"),
     "ActionExecuted": (":gear:", "Executing action: `{resourceName}`"),
     "ActionSucceeded": (":tada:", "Action succeeded: `{resourceName}`"),
-    "ActionFailed": (":x:", "Action failed: `{resourceName}`"),
+    "ApprovalRejected": (":no_entry_sign:", "Approval rejected for `{actionType}` on `{targetName}`"),
+    "ApprovalTimedOut": (":alarm_clock:", "Approval timed out for `{actionType}` on `{targetName}`"),
+    "ActionFailed": (":x:", "Action failed for `{actionType}` on `{targetName}`"),
+    "IncidentFailed": (":warning:", "Incident retry triggered: *{summary}*"),
     "IncidentResolved": (":green_circle:", "Incident resolved: `{incidentName}`"),
     "EscalationTriggered": (":fire:", "Escalation triggered — human review needed"),
 }
@@ -46,8 +49,7 @@ class SlackNotifier:
         self._client = AsyncWebClient(token=self._settings.slack_bot_token)
         self._channel = self._settings.slack_channel
         self._escalation_channel = self._settings.slack_escalation_channel
-        # incident_name -> thread_ts for threading
-        self._threads: dict[str, str] = {}
+        self._threads: dict[tuple[str, str], str] = {}
 
     async def send(self, event: DomainEvent) -> None:
         """Render and send a domain event.
@@ -66,7 +68,7 @@ class SlackNotifier:
         if event.event_type == "EscalationTriggered":
             channel = self._escalation_channel
 
-        thread_ts = self._threads.get(event.incident_name)
+        thread_ts = self._threads.get((channel, event.incident_name))
 
         try:
             response = await self._client.chat_postMessage(
@@ -79,7 +81,7 @@ class SlackNotifier:
             if event.event_type == "IncidentDetected" and response.get("ok"):
                 ts = response.get("ts", "")
                 if ts:
-                    self._threads[event.incident_name] = ts
+                    self._threads[(channel, event.incident_name)] = ts
 
             logger.debug(
                 "slack_message_sent",
@@ -105,12 +107,7 @@ class SlackNotifier:
 
         emoji, msg_template = template
 
-        # Build format kwargs from event payload + top-level fields
-        fmt_kwargs: dict[str, Any] = {
-            "incidentName": event.incident_name,
-            "namespace": event.namespace,
-            **event.payload,
-        }
+        fmt_kwargs = self._build_render_context(event)
 
         try:
             msg = msg_template.format_map(SafeFormatDict(fmt_kwargs))
@@ -118,6 +115,18 @@ class SlackNotifier:
             msg = f"{event.event_type}: {event.incident_name}"
 
         return f"{emoji} {msg}"
+
+    def _build_render_context(self, event: DomainEvent) -> dict[str, Any]:
+        """Build a rendering context with conservative fallbacks."""
+        payload = dict(event.payload)
+        return {
+            "incidentName": event.incident_name,
+            "namespace": event.namespace,
+            "summary": payload.get("summary") or event.incident_name,
+            "severity": payload.get("severity") or "unknown",
+            "category": payload.get("category") or "unknown",
+            **payload,
+        }
 
 
 class SafeFormatDict(dict[str, Any]):

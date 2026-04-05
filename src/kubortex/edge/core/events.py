@@ -1,4 +1,4 @@
-"""Domain event types derived from CRD phase transitions.
+"""Shared Edge notification event types derived from CRD phase transitions.
 
 Each event captures the essential information a notification sink needs
 to render a human-readable message.
@@ -7,9 +7,44 @@ to render a human-readable message.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
+
+
+class CommonPayload(TypedDict, total=False):
+    resourceName: str
+    phase: str
+
+
+class IncidentPayload(CommonPayload, total=False):
+    summary: str
+    severity: str
+    category: str
+    targetKind: str
+    targetNamespace: str
+    targetName: str
+    confidence: float
+    hypothesis: str
+    evidenceCount: int
+    proposedActionCount: int
+
+
+class InvestigationPayload(IncidentPayload, total=False):
+    pass
+
+
+class ApprovalPayload(CommonPayload, total=False):
+    actionType: str
+    remediationPlanRef: str
+    targetKind: str
+    targetNamespace: str
+    targetName: str
+
+
+class ActionPayload(ApprovalPayload, total=False):
+    approvalRequestRef: str
+    improved: bool
 
 
 class DomainEvent(BaseModel):
@@ -44,6 +79,14 @@ class ApprovalRequired(DomainEvent):
     event_type: str = Field(default="ApprovalRequired", alias="eventType")
 
 
+class ApprovalRejected(DomainEvent):
+    event_type: str = Field(default="ApprovalRejected", alias="eventType")
+
+
+class ApprovalTimedOut(DomainEvent):
+    event_type: str = Field(default="ApprovalTimedOut", alias="eventType")
+
+
 class ActionExecuted(DomainEvent):
     event_type: str = Field(default="ActionExecuted", alias="eventType")
 
@@ -54,6 +97,10 @@ class ActionSucceeded(DomainEvent):
 
 class ActionFailed(DomainEvent):
     event_type: str = Field(default="ActionFailed", alias="eventType")
+
+
+class IncidentFailed(DomainEvent):
+    event_type: str = Field(default="IncidentFailed", alias="eventType")
 
 
 class IncidentResolved(DomainEvent):

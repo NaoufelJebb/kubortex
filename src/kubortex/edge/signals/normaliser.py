@@ -1,16 +1,13 @@
-"""Map Alertmanager labels/annotations to Kubortex signal schema."""
+"""Map Alertmanager labels and annotations to Kubortex signal objects."""
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
 
+from kubortex.edge.core.resolver import TargetHints, resolve_target
 from kubortex.shared.models.incident import Signal, TargetRef
 from kubortex.shared.types import Category, Severity
-
-# ---------------------------------------------------------------------------
-# Label → Kubortex mapping tables
-# ---------------------------------------------------------------------------
 
 _SEVERITY_MAP: dict[str, Severity] = {
     "critical": Severity.CRITICAL,
@@ -21,8 +18,6 @@ _SEVERITY_MAP: dict[str, Severity] = {
     "none": Severity.INFO,
 }
 
-# NOTE: Category inference is heuristic and based on alert name patterns.
-# Prefer explicit labels such as "kubortex.io/category" when available.
 _CATEGORY_KEYWORDS: dict[str, Category] = {
     "cpu": Category.RESOURCE_SATURATION,
     "memory": Category.RESOURCE_SATURATION,
@@ -41,34 +36,18 @@ _CATEGORY_KEYWORDS: dict[str, Category] = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def normalise_severity(raw: str) -> Severity:
-    """Map an Alertmanager severity label to a Kubortex enum.
-
-    Args:
-        raw: Raw severity label.
-
-    Returns:
-        Normalized Kubortex severity.
-    """
+    """Map an Alertmanager severity label to a Kubortex enum."""
     return _SEVERITY_MAP.get(raw.lower(), Severity.WARNING)
 
 
 def infer_category(alertname: str, labels: dict[str, str]) -> Category:
-    """Infer a Kubortex category from alert metadata.
-
-    Args:
-        alertname: Alert name to inspect.
-        labels: Alert labels.
-
-    Returns:
-        Inferred Kubortex category.
-    """
-    explicit = labels.get("kubortex_category") or labels.get("category")
+    """Infer a Kubortex category from alert metadata."""
+    explicit = (
+        labels.get("kubortex.io/category")
+        or labels.get("kubortex_category")
+        or labels.get("category")
+    )
     if explicit:
         try:
             return Category(explicit)
@@ -78,73 +57,76 @@ def infer_category(alertname: str, labels: dict[str, str]) -> Category:
     lower = alertname.lower()
     compact = lower.replace("_", "").replace("-", "")
     for keyword, cat in _CATEGORY_KEYWORDS.items():
-        normalised_keyword = keyword.replace("_", "").replace("-", "")
-        if keyword in lower or normalised_keyword in compact:
+        normalized_keyword = keyword.replace("_", "").replace("-", "")
+        if keyword in lower or normalized_keyword in compact:
             return cat
     return Category.CUSTOM
 
 
-def extract_target_ref(labels: dict[str, str]) -> TargetRef | None:
-    """Extract a target reference from alert labels.
-
-    Args:
-        labels: Alert labels.
-
-    Returns:
-        Target reference when one can be inferred, else ``None``.
-    """
-    namespace = labels.get("namespace", "")
-    # Try common label patterns for Kubernetes workloads
-    for kind_label, kind_value in [
-        ("deployment", "Deployment"),
-        ("statefulset", "StatefulSet"),
-        ("daemonset", "DaemonSet"),
-    ]:
-        name = labels.get(kind_label, "")
-        if name and namespace:
-            return TargetRef(kind=kind_value, namespace=namespace, name=name)
-
-    # Fallback: use pod label to infer deployment
-    pod = labels.get("pod", "")
-    if pod and namespace:
-        return TargetRef(kind="Pod", namespace=namespace, name=pod)
-    return None
+def _first_label(labels: dict[str, str], *names: str) -> str:
+    for name in names:
+        value = labels.get(name, "")
+        if value:
+            return value
+    return ""
 
 
-def normalise_alert(alert: dict[str, Any]) -> tuple[Signal, Category, TargetRef | None]:
-    """Normalize one Alertmanager alert into Kubortex objects.
+def extract_target_hints(labels: dict[str, str]) -> TargetHints:
+    """Extract source-agnostic target hints from alert labels."""
+    return TargetHints(
+        namespace=_first_label(labels, "namespace", "exported_namespace", "kubernetes_namespace"),
+        pod=_first_label(labels, "pod", "pod_name", "kubernetes_pod_name"),
+        deployment=_first_label(labels, "deployment", "kubernetes_deployment_name"),
+        statefulset=_first_label(labels, "statefulset", "kubernetes_statefulset_name"),
+        daemonset=_first_label(labels, "daemonset", "kubernetes_daemonset_name"),
+        service=_first_label(labels, "service", "kubernetes_service_name"),
+        ingress=_first_label(labels, "ingress", "kubernetes_ingress_name"),
+        node=_first_label(labels, "node", "kubernetes_node"),
+        pvc=_first_label(
+            labels,
+            "persistentvolumeclaim",
+            "pvc",
+            "kubernetes_persistentvolumeclaim_name",
+        ),
+        raw_labels=dict(labels),
+    )
 
-    Args:
-        alert: Raw Alertmanager alert payload.
 
-    Returns:
-        Parsed ``(signal, category, target)`` tuple.
-    """
+async def normalise_alert(alert: dict[str, Any]) -> tuple[Signal, Category, TargetRef | None]:
+    """Normalize one Alertmanager alert into Kubortex objects."""
     labels = alert.get("labels", {})
     annotations = alert.get("annotations", {})
 
-    alertname = labels.get("alertname", "UnknownAlert")
-    severity = normalise_severity(labels.get("severity", "warning"))
+    if not isinstance(labels, dict):
+        raise ValueError("alert.labels must be a JSON object")
+    if not isinstance(annotations, dict):
+        raise ValueError("alert.annotations must be a JSON object")
+
+    alertname = str(labels.get("alertname", "UnknownAlert"))
+    severity = normalise_severity(str(labels.get("severity", "warning")))
     category = infer_category(alertname, labels)
-    target = extract_target_ref(labels)
+    target = await resolve_target(extract_target_hints(labels))
 
     summary = annotations.get("summary") or annotations.get("description") or alertname
 
     starts_at = alert.get("startsAt")
-    observed_at = (
-        datetime.fromisoformat(starts_at.replace("Z", "+00:00")) if starts_at else datetime.now(UTC)
-    )
+    if starts_at:
+        try:
+            observed_at = datetime.fromisoformat(str(starts_at).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("alert.startsAt must be an ISO 8601 timestamp") from exc
+    else:
+        observed_at = datetime.now(UTC)
 
-    # Collect any numeric values as payload
     payload: dict[str, str] = {}
     value = annotations.get("value") or labels.get("value")
-    if value:
+    if value is not None:
         payload["value"] = str(value)
 
     signal = Signal(
         alertname=alertname,
         severity=severity,
-        summary=summary,
+        summary=str(summary),
         observedAt=observed_at,
         payload=payload,
     )

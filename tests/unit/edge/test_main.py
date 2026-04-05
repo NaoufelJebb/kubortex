@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 import kubortex.edge.main as main_module
 from kubortex.edge.main import create_app
 from kubortex.shared.config import EdgeSettings
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,6 +23,8 @@ def _make_app(settings: EdgeSettings, monkeypatch):
     """Build a testable app with NotificationRouter.run() stubbed out."""
     mock_router = MagicMock()
     mock_router.run = AsyncMock()
+    mock_router.enabled = bool(settings.slack_bot_token)
+    mock_router.is_ready = True
     monkeypatch.setattr(main_module, "NotificationRouter", lambda *a, **kw: mock_router)
     monkeypatch.setattr(main_module, "configure_logging", MagicMock())
     return create_app(settings), mock_router
@@ -74,7 +74,7 @@ class TestNotificationWiring:
 
 class TestLifespan:
     def test_notification_router_started_on_startup(self, monkeypatch) -> None:
-        app, mock_router = _make_app(_settings(), monkeypatch)
+        app, mock_router = _make_app(_settings(bot_token="xoxb-test"), monkeypatch)
         with TestClient(app):
             pass
         mock_router.run.assert_called_once()
@@ -86,8 +86,18 @@ class TestLifespan:
 
     def test_each_create_app_call_is_independent(self, monkeypatch) -> None:
         """Two app instances must not share notification router state."""
-        app1, router1 = _make_app(_settings(bot_token="xoxb-1"), monkeypatch)
-        app2, router2 = _make_app(_settings(bot_token=""), monkeypatch)
+        _app1, router1 = _make_app(_settings(bot_token="xoxb-1"), monkeypatch)
+        _app2, router2 = _make_app(_settings(bot_token=""), monkeypatch)
         assert router1 is not router2
         router1.register.assert_called_once()
         router2.register.assert_not_called()
+
+    def test_readyz_returns_not_ready_when_router_reports_false(self, monkeypatch) -> None:
+        app, mock_router = _make_app(_settings(bot_token="xoxb-test"), monkeypatch)
+        mock_router.is_ready = False
+
+        with TestClient(app) as client:
+            response = client.get("/readyz")
+
+        assert response.status_code == 503
+        assert response.json() == {"status": "not_ready"}

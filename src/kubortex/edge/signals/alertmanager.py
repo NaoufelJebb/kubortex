@@ -14,6 +14,7 @@ class AlertmanagerSource:
     """Parse Alertmanager webhook payloads."""
 
     path: str = "/api/v1/alerts"
+    source_name: str = "alertmanager"
 
     async def parse(
         self, payload: dict[str, Any]
@@ -26,8 +27,11 @@ class AlertmanagerSource:
         Returns:
             Parsed ``(signal, category, target)`` tuples for firing alerts.
         """
-        return [
-            normalise_alert(alert)
-            for alert in payload.get("alerts", [])
-            if alert.get("status") != "resolved"
-        ]
+        parsed: list[tuple[Signal, Category, TargetRef | None]] = []
+        for alert in payload.get("alerts", []):
+            if not isinstance(alert, dict):
+                raise ValueError("each alert must be a JSON object")
+            if alert.get("status") == "resolved":
+                continue
+            parsed.append(await normalise_alert(alert))
+        return parsed

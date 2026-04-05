@@ -10,12 +10,13 @@ from importlib.metadata import version as package_version
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from kubernetes_asyncio import config as k8s_config
 
-from kubortex.edge.notifications.router import NotificationRouter
+from kubortex.edge.core.router import NotificationRouter
 from kubortex.edge.notifications.slack import SlackNotifier
 from kubortex.edge.signals.alertmanager import AlertmanagerSource
-from kubortex.edge.signals.ingester import SignalIngester
+from kubortex.edge.core.ingester import SignalIngester
 from kubortex.shared.config import EdgeSettings
 from kubortex.shared.logging import configure_logging
 
@@ -61,8 +62,10 @@ def create_app(settings: EdgeSettings | None = None) -> FastAPI:
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
-    @_app.get("/readyz")
-    async def readyz() -> dict[str, str]:
+    @_app.get("/readyz", response_model=None)
+    async def readyz():
+        if not notification_router.is_ready:
+            return JSONResponse(status_code=503, content={"status": "not_ready"})
         return {"status": "ok"}
 
     return _app

@@ -76,9 +76,17 @@ def make_incident_obj(
     target_ref: TargetRef | None = None,
 ) -> dict[str, Any]:
     """Build a minimal Kubernetes Incident CRD dict."""
-    spec: dict[str, Any] = {"signals": []}
+    spec: dict[str, Any] = {"signals": [], "categories": [category.value], "severity": "warning"}
     if target_ref is not None:
         spec["targetRef"] = target_ref.model_dump()
+
+    labels: dict[str, Any] = {
+        "kubortex.io/category": category,
+        "kubortex.io/severity": Severity.WARNING,
+        "kubortex.io/target-kind": target_ref.kind if target_ref else "",
+        "kubortex.io/target-ns": target_ref.namespace if target_ref else "",
+        "kubortex.io/target-name": target_ref.name if target_ref else "",
+    }
 
     return {
         "metadata": {
@@ -86,10 +94,7 @@ def make_incident_obj(
             "namespace": namespace,
             "uid": uid,
             "creationTimestamp": creation_timestamp,
-            "labels": {
-                "kubortex.io/category": category,
-                "kubortex.io/severity": Severity.WARNING,
-            },
+            "labels": labels,
         },
         "spec": spec,
         "status": {"phase": phase},
@@ -118,14 +123,19 @@ def alert() -> dict[str, Any]:
 
 @pytest.fixture()
 def mock_k8s(monkeypatch) -> dict[str, AsyncMock]:
-    """Patch all kubortex.shared.k8s functions used by the correlator."""
+    """Patch shared CRD helpers used by the Edge correlator."""
     mocks: dict[str, AsyncMock] = {
-        "list_resources": AsyncMock(return_value=[]),
         "create_resource": AsyncMock(return_value={}),
-        "get_resource": AsyncMock(return_value={"spec": {"signals": []}}),
-        "patch_spec": AsyncMock(return_value={}),
-        "patch_status": AsyncMock(return_value={}),
+        "get_resource": AsyncMock(return_value={"spec": {"signals": []}, "metadata": {}}),
+        "patch_spec": AsyncMock(return_value=None),
     }
-    for fn, mock in mocks.items():
-        monkeypatch.setattr(f"kubortex.edge.signals.correlator.{fn}", mock)
+    monkeypatch.setattr(
+        "kubortex.edge.core.correlator.create_resource",
+        mocks["create_resource"],
+    )
+    monkeypatch.setattr("kubortex.edge.core.correlator.get_resource", mocks["get_resource"])
+    monkeypatch.setattr(
+        "kubortex.edge.core.correlator.patch_spec",
+        mocks["patch_spec"],
+    )
     return mocks

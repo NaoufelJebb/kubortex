@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
 from kubortex.edge.signals.normaliser import (
-    extract_target_ref,
+    extract_target_hints,
     infer_category,
     normalise_alert,
     normalise_severity,
 )
 from kubortex.shared.types import Category, Severity
 
-from ..conftest import make_alert
-
-# ---------------------------------------------------------------------------
-# normalise_severity
-# ---------------------------------------------------------------------------
+from ..conftest import make_alert, make_target_ref
 
 
 class TestNormaliseSeverity:
@@ -26,7 +23,7 @@ class TestNormaliseSeverity:
         ("raw", "expected"),
         [
             ("critical", Severity.CRITICAL),
-            ("CRITICAL", Severity.CRITICAL),  # case-insensitive
+            ("CRITICAL", Severity.CRITICAL),
             ("error", Severity.HIGH),
             ("high", Severity.HIGH),
             ("warning", Severity.WARNING),
@@ -42,11 +39,6 @@ class TestNormaliseSeverity:
 
     def test_empty_string_defaults_to_warning(self) -> None:
         assert normalise_severity("") == Severity.WARNING
-
-
-# ---------------------------------------------------------------------------
-# infer_category
-# ---------------------------------------------------------------------------
 
 
 class TestInferCategory:
@@ -79,6 +71,10 @@ class TestInferCategory:
         labels = {"kubortex_category": "latency"}
         assert infer_category("HighCpuUsage", labels) == Category.LATENCY
 
+    def test_explicit_kubortex_io_category_label_wins(self) -> None:
+        labels = {"kubortex.io/category": "latency"}
+        assert infer_category("HighCpuUsage", labels) == Category.LATENCY
+
     def test_explicit_category_label_wins(self) -> None:
         labels = {"category": "security"}
         assert infer_category("HighCpuUsage", labels) == Category.SECURITY
@@ -92,85 +88,60 @@ class TestInferCategory:
         assert infer_category("SomethingWeird", labels) == Category.CUSTOM
 
 
-# ---------------------------------------------------------------------------
-# extract_target_ref
-# ---------------------------------------------------------------------------
+class TestExtractTargetHints:
+    def test_extracts_workload_and_namespace_hints(self) -> None:
+        hints = extract_target_hints({"namespace": "prod", "deployment": "api"})
+        assert hints.namespace == "prod"
+        assert hints.deployment == "api"
 
-
-class TestExtractTargetRef:
-    def test_deployment_label_produces_deployment_ref(self) -> None:
-        labels = {"namespace": "prod", "deployment": "api-server"}
-        ref = extract_target_ref(labels)
-        assert ref is not None
-        assert ref.kind == "Deployment"
-        assert ref.namespace == "prod"
-        assert ref.name == "api-server"
-
-    def test_statefulset_label_produces_statefulset_ref(self) -> None:
-        labels = {"namespace": "prod", "statefulset": "postgres"}
-        ref = extract_target_ref(labels)
-        assert ref is not None
-        assert ref.kind == "StatefulSet"
-        assert ref.name == "postgres"
-
-    def test_daemonset_label_produces_daemonset_ref(self) -> None:
-        labels = {"namespace": "kube-system", "daemonset": "node-agent"}
-        ref = extract_target_ref(labels)
-        assert ref is not None
-        assert ref.kind == "DaemonSet"
-
-    def test_pod_label_fallback(self) -> None:
-        labels = {"namespace": "default", "pod": "api-abc123"}
-        ref = extract_target_ref(labels)
-        assert ref is not None
-        assert ref.kind == "Pod"
-        assert ref.name == "api-abc123"
-
-    def test_no_usable_labels_returns_none(self) -> None:
-        assert extract_target_ref({}) is None
-
-    def test_workload_name_without_namespace_returns_none(self) -> None:
-        # deployment present but no namespace → no match
-        assert extract_target_ref({"deployment": "api"}) is None
-
-    def test_deployment_takes_priority_over_pod(self) -> None:
-        labels = {"namespace": "default", "deployment": "api", "pod": "api-xyz"}
-        ref = extract_target_ref(labels)
-        assert ref is not None
-        assert ref.kind == "Deployment"
-
-
-# ---------------------------------------------------------------------------
-# normalise_alert (integration of the three helpers)
-# ---------------------------------------------------------------------------
+    def test_extracts_common_aliases(self) -> None:
+        hints = extract_target_hints(
+            {
+                "exported_namespace": "prod",
+                "kubernetes_pod_name": "api-123",
+                "kubernetes_service_name": "api-svc",
+                "kubernetes_node": "worker-1",
+                "kubernetes_persistentvolumeclaim_name": "data-api-0",
+            }
+        )
+        assert hints.namespace == "prod"
+        assert hints.pod == "api-123"
+        assert hints.service == "api-svc"
+        assert hints.node == "worker-1"
+        assert hints.pvc == "data-api-0"
 
 
 class TestNormaliseAlert:
-    def test_basic_alert_returns_signal_category_target(self, alert: dict) -> None:
-        signal, category, target = normalise_alert(alert)
+    @pytest.mark.asyncio
+    async def test_basic_alert_returns_signal_category_target(self) -> None:
+        signal, category, target = await normalise_alert(make_alert())
         assert signal.alertname == "TestAlert"
         assert signal.severity == Severity.WARNING
-        assert category == Category.CUSTOM  # "TestAlert" hits no keyword
+        assert category == Category.CUSTOM
         assert target is not None
         assert target.kind == "Deployment"
 
-    def test_missing_labels_uses_defaults(self) -> None:
-        signal, _, target = normalise_alert({})
+    @pytest.mark.asyncio
+    async def test_missing_labels_uses_defaults(self) -> None:
+        signal, _, target = await normalise_alert({})
         assert signal.alertname == "UnknownAlert"
         assert signal.severity == Severity.WARNING
         assert target is None
 
-    def test_summary_annotation_used_as_summary(self) -> None:
-        a = make_alert(annotations={"summary": "High CPU on pod"})
-        signal, _, _ = normalise_alert(a)
+    @pytest.mark.asyncio
+    async def test_summary_annotation_used_as_summary(self) -> None:
+        signal, _, _ = await normalise_alert(make_alert(annotations={"summary": "High CPU on pod"}))
         assert signal.summary == "High CPU on pod"
 
-    def test_description_annotation_fallback(self) -> None:
-        a = make_alert(annotations={"description": "Fallback description"})
-        signal, _, _ = normalise_alert(a)
+    @pytest.mark.asyncio
+    async def test_description_annotation_fallback(self) -> None:
+        signal, _, _ = await normalise_alert(
+            make_alert(annotations={"description": "Fallback description"})
+        )
         assert signal.summary == "Fallback description"
 
-    def test_alertname_used_when_no_annotation(self) -> None:
+    @pytest.mark.asyncio
+    async def test_alertname_used_when_no_annotation(self) -> None:
         a = {
             "status": "firing",
             "labels": {
@@ -180,15 +151,16 @@ class TestNormaliseAlert:
                 "deployment": "my-app",
             },
         }
-        signal, _, _ = normalise_alert(a)
+        signal, _, _ = await normalise_alert(a)
         assert signal.summary == a["labels"]["alertname"]
 
-    def test_starts_at_parsed_correctly(self) -> None:
-        a = make_alert(starts_at="2024-06-15T12:00:00Z")
-        signal, _, _ = normalise_alert(a)
+    @pytest.mark.asyncio
+    async def test_starts_at_parsed_correctly(self) -> None:
+        signal, _, _ = await normalise_alert(make_alert(starts_at="2024-06-15T12:00:00Z"))
         assert signal.observed_at == datetime(2024, 6, 15, 12, 0, 0, tzinfo=UTC)
 
-    def test_missing_starts_at_uses_now(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    @pytest.mark.asyncio
+    async def test_missing_starts_at_uses_now(self, monkeypatch: pytest.MonkeyPatch) -> None:
         fixed = datetime(2024, 1, 1, tzinfo=UTC)
         monkeypatch.setattr(
             "kubortex.edge.signals.normaliser.datetime",
@@ -203,20 +175,50 @@ class TestNormaliseAlert:
         )
         a = make_alert()
         del a["startsAt"]
-        signal, _, _ = normalise_alert(a)
+        signal, _, _ = await normalise_alert(a)
         assert signal.observed_at == fixed
 
-    def test_value_annotation_stored_in_payload(self) -> None:
-        a = make_alert(annotations={"value": "95.3", "summary": "CPU high"})
-        signal, _, _ = normalise_alert(a)
+    @pytest.mark.asyncio
+    async def test_value_annotation_stored_in_payload(self) -> None:
+        signal, _, _ = await normalise_alert(
+            make_alert(annotations={"value": "95.3", "summary": "CPU high"})
+        )
         assert signal.payload.get("value") == "95.3"
 
-    def test_value_label_stored_in_payload_when_no_annotation(self) -> None:
-        a = make_alert(extra_labels={"value": "42"})
-        signal, _, _ = normalise_alert(a)
+    @pytest.mark.asyncio
+    async def test_value_label_stored_in_payload_when_no_annotation(self) -> None:
+        signal, _, _ = await normalise_alert(make_alert(extra_labels={"value": "42"}))
         assert signal.payload.get("value") == "42"
 
-    def test_no_value_gives_empty_payload(self) -> None:
-        a = make_alert(annotations={"summary": "ok"})
-        signal, _, _ = normalise_alert(a)
+    @pytest.mark.asyncio
+    async def test_no_value_gives_empty_payload(self) -> None:
+        signal, _, _ = await normalise_alert(make_alert(annotations={"summary": "ok"}))
         assert signal.payload == {}
+
+    @pytest.mark.asyncio
+    async def test_invalid_starts_at_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match=r"alert\.startsAt must be an ISO 8601 timestamp"):
+            await normalise_alert(make_alert(starts_at="not-a-timestamp"))
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_labels_raise_value_error(self) -> None:
+        with pytest.raises(ValueError, match=r"alert\.labels must be a JSON object"):
+            await normalise_alert({"labels": []})
+
+    @pytest.mark.asyncio
+    async def test_non_mapping_annotations_raise_value_error(self) -> None:
+        with pytest.raises(ValueError, match=r"alert\.annotations must be a JSON object"):
+            await normalise_alert({"annotations": []})
+
+    @pytest.mark.asyncio
+    async def test_resolver_is_used_for_target_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        mock = AsyncMock(return_value=make_target_ref(kind="Service", name="payments"))
+        monkeypatch.setattr("kubortex.edge.signals.normaliser.resolve_target", mock)
+
+        _, _, target = await normalise_alert(
+            make_alert(deployment="", extra_labels={"service": "payments"})
+        )
+
+        assert target is not None
+        assert target.kind == "Service"
+        mock.assert_awaited_once()

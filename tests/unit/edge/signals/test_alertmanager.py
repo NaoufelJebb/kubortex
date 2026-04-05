@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -34,7 +34,7 @@ def client() -> TestClient:
 @pytest.fixture()
 def mock_correlate(monkeypatch) -> AsyncMock:
     mock = AsyncMock(return_value="inc-20240101-aabbccdd")
-    monkeypatch.setattr("kubortex.edge.signals.ingester.correlate_and_upsert", mock)
+    monkeypatch.setattr("kubortex.edge.core.ingester.correlate_and_upsert", mock)
     return mock
 
 
@@ -84,9 +84,9 @@ class TestReceiveAlerts:
         mock_correlate.assert_not_awaited()
 
     def test_resolved_alerts_do_not_call_normaliser(self, client: TestClient, monkeypatch) -> None:
-        mock_normalise = MagicMock()
+        mock_normalise = AsyncMock()
         monkeypatch.setattr("kubortex.edge.signals.alertmanager.normalise_alert", mock_normalise)
-        monkeypatch.setattr("kubortex.edge.signals.ingester.correlate_and_upsert", AsyncMock())
+        monkeypatch.setattr("kubortex.edge.core.ingester.correlate_and_upsert", AsyncMock())
 
         resp = client.post("/api/v1/alerts", json=_make_payload(make_alert(status="resolved")))
 
@@ -137,6 +137,25 @@ class TestReceiveAlerts:
         resp = client.post("/api/v1/alerts", json=payload)
         assert resp.text == "processed 1 signals"
 
+    def test_invalid_alert_shape_returns_400(self, client: TestClient, monkeypatch) -> None:
+        monkeypatch.setattr("kubortex.edge.core.ingester.correlate_and_upsert", AsyncMock())
+
+        resp = client.post("/api/v1/alerts", json={"alerts": ["bad"]})
+
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": "each alert must be a JSON object"}
+
+    def test_invalid_timestamp_returns_400(self, client: TestClient, monkeypatch) -> None:
+        monkeypatch.setattr("kubortex.edge.core.ingester.correlate_and_upsert", AsyncMock())
+
+        resp = client.post(
+            "/api/v1/alerts",
+            json=_make_payload(make_alert(starts_at="not-a-timestamp")),
+        )
+
+        assert resp.status_code == 400
+        assert resp.json() == {"detail": "alert.startsAt must be an ISO 8601 timestamp"}
+
     def test_groups_signals_and_forwards_namespace_to_correlator(
         self, client: TestClient, monkeypatch
     ) -> None:
@@ -144,7 +163,7 @@ class TestReceiveAlerts:
         signal_two = make_signal(summary="CPU still high")
         target = make_target_ref(name="api")
 
-        mock_normalise = MagicMock(
+        mock_normalise = AsyncMock(
             side_effect=[
                 (signal_one, Category.RESOURCE_SATURATION, target),
                 (signal_two, Category.RESOURCE_SATURATION, target),
@@ -154,7 +173,7 @@ class TestReceiveAlerts:
 
         monkeypatch.setattr("kubortex.edge.signals.alertmanager.normalise_alert", mock_normalise)
         monkeypatch.setattr(
-            "kubortex.edge.signals.ingester.correlate_and_upsert",
+            "kubortex.edge.core.ingester.correlate_and_upsert",
             mock_correlate,
         )
 
@@ -164,6 +183,18 @@ class TestReceiveAlerts:
         mock_correlate.assert_awaited_once()
         args = mock_correlate.await_args.args
         assert args[0] == [signal_one, signal_two]
-        assert args[1] == Category.RESOURCE_SATURATION
+        assert args[1] == [Category.RESOURCE_SATURATION]
         assert args[2] == target
         assert args[3] == "kubortex-system"
+
+    def test_request_path_does_not_preload_incident_index(
+        self, client: TestClient, monkeypatch
+    ) -> None:
+        mock_correlate = AsyncMock(return_value="inc-20240101-aabbccdd")
+
+        monkeypatch.setattr("kubortex.edge.core.ingester.correlate_and_upsert", mock_correlate)
+
+        resp = client.post("/api/v1/alerts", json=_make_payload(make_alert(), make_alert()))
+
+        assert resp.status_code == 200
+        mock_correlate.assert_awaited_once()

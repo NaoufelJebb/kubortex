@@ -1,0 +1,1 @@
+"""Core Edge workflow logic and shared event contracts."""
