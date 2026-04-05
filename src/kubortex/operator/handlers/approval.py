@@ -14,7 +14,7 @@ from kubernetes_asyncio.client import ApiException
 
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import ACTION_EXECUTIONS, APPROVAL_REQUESTS, INCIDENTS
-from kubortex.shared.k8s import create_resource, get_resource, patch_status
+from kubortex.shared.crds import create_resource, get_resource, patch_status
 from kubortex.shared.types import (
     ActionExecutionPhase,
     ApprovalRequestPhase,
@@ -67,7 +67,6 @@ async def on_approval_decision(
                 APPROVAL_REQUESTS,
                 name,
                 {"phase": ApprovalRequestPhase.APPROVED},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status == 404:
@@ -78,7 +77,8 @@ async def on_approval_decision(
 
         # Create ActionExecution for the approved action (409 = already created on retry)
         action = spec.get("action", {})
-        ae_name = f"ae-{incident_ref}-{action.get('id', 'unknown')}"
+        inv_ref = spec.get("investigationRef", "")
+        ae_name = f"ae-{inv_ref}-{action.get('id', 'unknown')}"
         ae_body = {
             "apiVersion": f"{GROUP}/{VERSION}",
             "kind": "ActionExecution",
@@ -104,16 +104,14 @@ async def on_approval_decision(
                     "decidedBy": body.get("status", {}).get("decidedBy", ""),
                     "decidedAt": body.get("status", {}).get("decidedAt"),
                 },
-                "rollbackOnRegression": True,
             },
         }
         try:
-            await create_resource(ACTION_EXECUTIONS, ae_body, namespace=namespace)
+            await create_resource(ACTION_EXECUTIONS, ae_body)
             await patch_status(
                 ACTION_EXECUTIONS,
                 ae_name,
                 {"phase": ActionExecutionPhase.APPROVED},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status != 409:
@@ -122,7 +120,7 @@ async def on_approval_decision(
 
         # Atomically increment budget for the approved action
         try:
-            incident_resource = await get_resource(INCIDENTS, incident_ref, namespace=namespace)
+            incident_resource = await get_resource(INCIDENTS, incident_ref)
             profile_name = (incident_resource.get("status") or {}).get("autonomyProfile", "")
             if profile_name:
                 action_type = action.get("type", "")
@@ -137,7 +135,6 @@ async def on_approval_decision(
                 INCIDENTS,
                 incident_ref,
                 {"phase": IncidentPhase.EXECUTING},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status != 404:
@@ -149,7 +146,6 @@ async def on_approval_decision(
                 APPROVAL_REQUESTS,
                 name,
                 {"phase": ApprovalRequestPhase.REJECTED},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status == 404:
@@ -161,7 +157,6 @@ async def on_approval_decision(
                 INCIDENTS,
                 incident_ref,
                 {"phase": IncidentPhase.ESCALATED},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status != 404:
@@ -207,7 +202,6 @@ async def check_approval_timeout(
             APPROVAL_REQUESTS,
             name,
             {"phase": ApprovalRequestPhase.TIMED_OUT},
-            namespace=namespace,
         )
         incident_ref = body.get("spec", {}).get("incidentRef", "")
         if incident_ref:
@@ -215,6 +209,5 @@ async def check_approval_timeout(
                 INCIDENTS,
                 incident_ref,
                 {"phase": IncidentPhase.ESCALATED},
-                namespace=namespace,
             )
         logger.warning("approval_timed_out", name=name)

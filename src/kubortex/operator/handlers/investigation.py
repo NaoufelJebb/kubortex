@@ -1,6 +1,6 @@
 """Kopf handler for Investigation CRD lifecycle transitions.
 
-Observes claimedBy, result, and timeout to transition Investigation phases.
+Observes claimedBy and result to transition Investigation phases.
 The operator never performs investigation — only governs phase transitions.
 """
 
@@ -13,8 +13,8 @@ import structlog
 from kubernetes_asyncio.client import ApiException
 
 from kubortex.operator.settings import GROUP, VERSION
-from kubortex.shared.constants import INCIDENTS, INVESTIGATIONS
-from kubortex.shared.k8s import patch_status
+from kubortex.shared.constants import INCIDENTS, INVESTIGATIONS, REMEDIATION_PLANS
+from kubortex.shared.crds import create_resource, patch_status
 from kubortex.shared.types import IncidentPhase, InvestigationPhase
 
 logger = structlog.get_logger(__name__)
@@ -54,7 +54,6 @@ async def on_investigation_claimed(
             INVESTIGATIONS,
             name,
             {"phase": InvestigationPhase.IN_PROGRESS},
-            namespace=namespace,
         )
     except ApiException as exc:
         if exc.status == 404:
@@ -72,19 +71,18 @@ async def on_investigation_result(
     new: Any | None,
     **_: Any,
 ) -> None:
-    """Transition Investigation → Completed and advance the parent Incident.
+    """Transition Investigation → Completed, advance the parent Incident, and create a RemediationPlan.
 
     Triggered when the investigator worker writes ``status.result``. The
     handler:
     1. Transitions the Investigation to Completed.
     2. Copies a synopsis (hypothesis, confidence, evidence/action counts)
        into ``Incident.status.investigation``.
-    3. If ``result.escalate=True``, transitions Incident → Escalated
-       (investigator determined autonomous remediation is inappropriate).
-       Otherwise, transitions Incident → RemediationPlanned to signal the
-       remediator worker that a plan is ready to evaluate.
+    3. If ``result.escalate=True``, transitions Incident → Escalated.
+       Otherwise, transitions Incident → RemediationPlanned and creates
+       a RemediationPlan CR from the investigation's recommendedActions.
 
-    Guard: phase must be InProgress to prevent duplicate processing.
+    Guard: idempotency check — exits early if already Completed.
 
     Args:
         body: Investigation resource body.
@@ -95,7 +93,7 @@ async def on_investigation_result(
     if not isinstance(new, dict) or not new:
         return
     status = body.get("status", {})
-    if status.get("phase") != InvestigationPhase.IN_PROGRESS:
+    if status.get("phase") == InvestigationPhase.COMPLETED:
         return
 
     try:
@@ -103,7 +101,6 @@ async def on_investigation_result(
             INVESTIGATIONS,
             name,
             {"phase": InvestigationPhase.COMPLETED},
-            namespace=namespace,
         )
     except ApiException as exc:
         if exc.status == 404:
@@ -128,14 +125,12 @@ async def on_investigation_result(
             INCIDENTS,
             incident_ref,
             {"investigation": synopsis},
-            namespace=namespace,
         )
         if new.get("escalate"):
             await patch_status(
                 INCIDENTS,
                 incident_ref,
                 {"phase": IncidentPhase.ESCALATED},
-                namespace=namespace,
             )
             logger.warning("investigation_result_escalate", name=name, incident=incident_ref)
         else:
@@ -143,56 +138,47 @@ async def on_investigation_result(
                 INCIDENTS,
                 incident_ref,
                 {"phase": IncidentPhase.REMEDIATION_PLANNED},
-                namespace=namespace,
             )
             logger.info("incident_remediation_planned", name=name, incident=incident_ref)
+
+            # Create the RemediationPlan CR from the investigation result
+            rp_name = f"rp-{name}"
+            rp_body = {
+                "apiVersion": f"{GROUP}/{VERSION}",
+                "kind": "RemediationPlan",
+                "metadata": {
+                    "name": rp_name,
+                    "namespace": namespace,
+                    "labels": {"kubortex.io/incident": incident_ref},
+                },
+                "spec": {
+                    "incidentRef": incident_ref,
+                    "investigationRef": name,
+                    "hypothesis": new.get("hypothesis", ""),
+                    "confidence": new.get("confidence", 0.0),
+                    "actions": [
+                        {
+                            "id": f"a{i}",
+                            "type": a.get("type", ""),
+                            "target": a.get("target", {}),
+                            "parameters": a.get("parameters", {}),
+                            "rationale": a.get("rationale", ""),
+                        }
+                        for i, a in enumerate(new.get("recommendedActions", []))
+                    ],
+                },
+            }
+            try:
+                await create_resource(REMEDIATION_PLANS, rp_body)
+                logger.info("remediation_plan_created", name=rp_name, incident=incident_ref)
+            except ApiException as exc:
+                if exc.status == 409:
+                    logger.info("remediation_plan_already_exists", name=rp_name)
+                elif exc.status != 404:
+                    raise
+
     except ApiException as exc:
         if exc.status == 404:
             logger.warning("incident_gone_on_investigation_result", name=name, incident=incident_ref)
         else:
             raise
-
-
-@kopf.on.field(GROUP, VERSION, INVESTIGATIONS, field="status.phase")
-async def on_investigation_phase_terminal(
-    body: dict[str, Any],
-    name: str,
-    namespace: str,
-    new: str | None,
-    **_: Any,
-) -> None:
-    """Transition parent Incident → Escalated on abnormal Investigation termination.
-
-    Fires when ``status.phase`` changes to TimedOut or Cancelled — both
-    indicate the investigator worker did not produce a result (timeout
-    exceeded, or the worker explicitly abandoned the investigation). In
-    either case the incident cannot progress autonomously and must be
-    handed to a human.
-
-    All other phase values are ignored; the normal completion path is
-    handled by ``on_investigation_result``.
-
-    Args:
-        body: Investigation resource body.
-        name: Investigation name.
-        namespace: Investigation namespace.
-        new: New phase value (only acts on TimedOut or Cancelled).
-    """
-    if new not in (InvestigationPhase.TIMED_OUT, InvestigationPhase.CANCELLED):
-        return
-    incident_ref = body.get("spec", {}).get("incidentRef", "")
-    if not incident_ref:
-        return
-    try:
-        await patch_status(
-            INCIDENTS,
-            incident_ref,
-            {"phase": IncidentPhase.ESCALATED},
-            namespace=namespace,
-        )
-    except ApiException as exc:
-        if exc.status == 404:
-            logger.warning("incident_gone_on_investigation_terminal", name=name, incident=incident_ref)
-            return
-        raise
-    logger.warning("investigation_terminal_escalates", name=name, phase=new, incident=incident_ref)

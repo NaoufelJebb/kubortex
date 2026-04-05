@@ -20,9 +20,9 @@ from kubortex.shared.constants import (
     INCIDENTS,
     REMEDIATION_PLANS,
 )
-from kubortex.shared.k8s import create_resource, get_resource, patch_status
+from kubortex.shared.crds import create_resource, get_resource, patch_spec, patch_status
 from kubortex.shared.models.autonomy import AutonomyProfileSpec
-from kubortex.shared.models.remediation import RemediationPlanSpec
+from kubortex.shared.models.remediation import PolicyEvaluationResult, RemediationPlanSpec
 from kubortex.shared.types import (
     ActionExecutionPhase,
     ApprovalLevel,
@@ -70,12 +70,12 @@ async def on_remediation_plan_create(
     """
     plan_spec = RemediationPlanSpec.model_validate(body.get("spec", {}))
     try:
-        incident = await get_resource("incidents", plan_spec.incident_ref, namespace=namespace)
+        incident = await get_resource("incidents", plan_spec.incident_ref)
     except ApiException as exc:
         if exc.status == 404:
             logger.warning("incident_gone_on_plan_create", plan=name, incident=plan_spec.incident_ref)
             await patch_status(
-                REMEDIATION_PLANS, name, {"phase": RemediationPlanPhase.REJECTED}, namespace=namespace
+                REMEDIATION_PLANS, name, {"phase": RemediationPlanPhase.REJECTED}
             )
             return
         raise
@@ -86,7 +86,6 @@ async def on_remediation_plan_create(
             INCIDENTS,
             plan_spec.incident_ref,
             {"remediationPlanRef": name},
-            namespace=namespace,
         )
     except ApiException as exc:
         if exc.status != 404:
@@ -100,7 +99,6 @@ async def on_remediation_plan_create(
             REMEDIATION_PLANS,
             name,
             {"phase": RemediationPlanPhase.REJECTED},
-            namespace=namespace,
         )
         return
 
@@ -110,7 +108,7 @@ async def on_remediation_plan_create(
         if exc.status == 404:
             logger.warning("autonomy_profile_gone_on_plan_create", plan=name, profile=profile_name)
             await patch_status(
-                REMEDIATION_PLANS, name, {"phase": RemediationPlanPhase.REJECTED}, namespace=namespace
+                REMEDIATION_PLANS, name, {"phase": RemediationPlanPhase.REJECTED}
             )
             return
         raise
@@ -126,6 +124,9 @@ async def on_remediation_plan_create(
     needs_approval = False
     all_denied = True
     executed_action_types: list[str] = []
+    evaluation_results: list[PolicyEvaluationResult] = []
+    ar_refs: list[str] = []
+    ae_refs: list[str] = []
 
     for action in plan_spec.actions:
         ctx = ActionContext(
@@ -135,6 +136,13 @@ async def on_remediation_plan_create(
             target_key=f"{action.target.namespace}/{action.target.name}",
         )
         decision = evaluate_action(ctx, profile_spec, budget_usage)
+        evaluation_results.append(PolicyEvaluationResult(
+            action_id=action.id,
+            allowed=decision.allowed,
+            approval_required=decision.approval if decision.allowed else ApprovalLevel.REQUIRED,
+            matched_rule=decision.matched_rule,
+            budget_available=decision.budget_available,
+        ))
 
         if not decision.allowed:
             logger.warning("action_denied", action=action.id, reason=decision.deny_reason)
@@ -143,6 +151,8 @@ async def on_remediation_plan_create(
         all_denied = False
         if decision.approval == ApprovalLevel.REQUIRED:
             needs_approval = True
+            ar_name = f"ar-{plan_spec.investigation_ref}-{action.id}"
+            ar_refs.append(ar_name)
             try:
                 await _create_approval_request(name, plan_spec, action, namespace)
             except ApiException as exc:
@@ -150,6 +160,8 @@ async def on_remediation_plan_create(
                     raise
                 logger.info("approval_request_already_exists", plan=name, action=action.id)
         else:
+            ae_name = f"ae-{plan_spec.investigation_ref}-{action.id}"
+            ae_refs.append(ae_name)
             try:
                 await _create_action_execution(name, plan_spec, action, namespace)
             except ApiException as exc:
@@ -157,6 +169,14 @@ async def on_remediation_plan_create(
                     raise
                 logger.info("action_execution_already_exists", plan=name, action=action.id)
             executed_action_types.append(action.type)
+
+    # Write policy evaluation results into the plan spec.
+    if evaluation_results:
+        await patch_spec(
+            REMEDIATION_PLANS,
+            name,
+            {"policyEvaluation": [r.model_dump(by_alias=True) for r in evaluation_results]},
+        )
 
     # Atomically increment budget for auto-approved actions using optimistic locking.
     if executed_action_types:
@@ -167,19 +187,26 @@ async def on_remediation_plan_create(
 
         await update_usage(profile_name, _apply_increments)
 
+    # Record spawned child resource refs on the plan status.
+    refs_patch: dict[str, list[str]] = {}
+    if ar_refs:
+        refs_patch["approvalRequestRefs"] = ar_refs
+    if ae_refs:
+        refs_patch["actionExecutionRefs"] = ae_refs
+    if refs_patch and not all_denied:
+        await patch_status(REMEDIATION_PLANS, name, refs_patch)
+
     if all_denied:
         await patch_status(
             REMEDIATION_PLANS,
             name,
             {"phase": RemediationPlanPhase.REJECTED},
-            namespace=namespace,
         )
         try:
             await patch_status(
                 INCIDENTS,
                 plan_spec.incident_ref,
                 {"phase": IncidentPhase.ESCALATED},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status != 404:
@@ -190,7 +217,6 @@ async def on_remediation_plan_create(
                 INCIDENTS,
                 plan_spec.incident_ref,
                 {"phase": IncidentPhase.PENDING_APPROVAL},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status != 404:
@@ -217,7 +243,7 @@ async def _create_approval_request(
         action: Action proposal that requires human approval.
         namespace: Namespace for the new ApprovalRequest.
     """
-    ar_name = f"ar-req-{plan_spec.incident_ref}-{action.id}"
+    ar_name = f"ar-{plan_spec.investigation_ref}-{action.id}"
     ar_body = {
         "apiVersion": f"{GROUP}/{VERSION}",
         "kind": "ApprovalRequest",
@@ -231,6 +257,7 @@ async def _create_approval_request(
         },
         "spec": {
             "incidentRef": plan_spec.incident_ref,
+            "investigationRef": plan_spec.investigation_ref,
             "remediationPlanRef": plan_name,
             "action": {
                 "id": action.id,
@@ -247,12 +274,11 @@ async def _create_approval_request(
             "timeoutMinutes": settings.approval_timeout_minutes,
         },
     }
-    await create_resource(APPROVAL_REQUESTS, ar_body, namespace=namespace)
+    await create_resource(APPROVAL_REQUESTS, ar_body)
     await patch_status(
         APPROVAL_REQUESTS,
         ar_name,
         {"phase": ApprovalRequestPhase.PENDING},
-        namespace=namespace,
     )
     logger.info("approval_request_created", name=ar_name)
 
@@ -277,7 +303,7 @@ async def _create_action_execution(
         action: Auto-approved action proposal.
         namespace: Namespace for the new ActionExecution.
     """
-    ae_name = f"ae-{plan_spec.incident_ref}-{action.id}"
+    ae_name = f"ae-{plan_spec.investigation_ref}-{action.id}"
     ae_body = {
         "apiVersion": f"{GROUP}/{VERSION}",
         "kind": "ActionExecution",
@@ -298,19 +324,12 @@ async def _create_action_execution(
                 "parameters": action.parameters,
                 "riskTier": action.risk_tier,
             },
-            "verificationMetric": (
-                plan_spec.verification_metric.model_dump(by_alias=True)
-                if plan_spec.verification_metric
-                else None
-            ),
-            "rollbackOnRegression": True,
         },
     }
-    await create_resource(ACTION_EXECUTIONS, ae_body, namespace=namespace)
+    await create_resource(ACTION_EXECUTIONS, ae_body)
     await patch_status(
         ACTION_EXECUTIONS,
         ae_name,
         {"phase": ActionExecutionPhase.APPROVED},
-        namespace=namespace,
     )
     logger.info("action_execution_created", name=ae_name)

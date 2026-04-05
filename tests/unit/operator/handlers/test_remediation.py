@@ -190,7 +190,7 @@ class TestCreateApprovalRequest:
 
 
 class TestCreateActionExecution:
-    def _plan_spec_and_action(self, with_verification: bool = False):
+    def _plan_spec_and_action(self):
         spec_dict: dict = {
             "incidentRef": "inc-1",
             "investigationRef": "inv-1",
@@ -198,12 +198,6 @@ class TestCreateActionExecution:
             "confidence": 0.9,
             "actions": [make_action_proposal()],
         }
-        if with_verification:
-            spec_dict["verificationMetric"] = {
-                "promql": "rate(errors[2m])",
-                "successThreshold": 0.01,
-                "checkDelaySeconds": 60,
-            }
         plan_spec = RemediationPlanSpec.model_validate(spec_dict)
         action = ActionProposal.model_validate(make_action_proposal())
         return plan_spec, action
@@ -214,22 +208,8 @@ class TestCreateActionExecution:
         mock_k8s["create_resource"].assert_awaited_once()
         assert mock_k8s["create_resource"].call_args.args[0] == "actionexecutions"
 
-    async def test_ae_body_kind_and_rollback_flag(self, mock_k8s) -> None:
+    async def test_ae_body_kind(self, mock_k8s) -> None:
         plan_spec, action = self._plan_spec_and_action()
         await _create_action_execution("rp-1", plan_spec, action, NS)
         body = mock_k8s["create_resource"].call_args.args[1]
         assert body["kind"] == "ActionExecution"
-        assert body["spec"]["rollbackOnRegression"] is True
-
-    async def test_ae_body_verification_metric_when_present(self, mock_k8s) -> None:
-        plan_spec, action = self._plan_spec_and_action(with_verification=True)
-        await _create_action_execution("rp-1", plan_spec, action, NS)
-        body = mock_k8s["create_resource"].call_args.args[1]
-        assert body["spec"]["verificationMetric"] is not None
-        assert body["spec"]["verificationMetric"]["promql"] == "rate(errors[2m])"
-
-    async def test_ae_body_verification_metric_none_when_absent(self, mock_k8s) -> None:
-        plan_spec, action = self._plan_spec_and_action(with_verification=False)
-        await _create_action_execution("rp-1", plan_spec, action, NS)
-        body = mock_k8s["create_resource"].call_args.args[1]
-        assert body["spec"]["verificationMetric"] is None

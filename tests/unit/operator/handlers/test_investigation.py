@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from kubortex.operator.handlers.investigation import (
     on_investigation_claimed,
-    on_investigation_phase_terminal,
     on_investigation_result,
 )
 from kubortex.shared.types import IncidentPhase, InvestigationPhase
@@ -62,8 +61,8 @@ class TestOnInvestigationResult:
         await on_investigation_result(body=body, name="inv", namespace=NS, new=None)
         mock_k8s["patch_status"].assert_not_awaited()
 
-    async def test_non_in_progress_phase_skips(self, mock_k8s) -> None:
-        body = make_investigation_body(phase="Pending")
+    async def test_already_completed_skips(self, mock_k8s) -> None:
+        body = make_investigation_body(phase="Completed")
         await on_investigation_result(body=body, name="inv", namespace=NS, new={"hypothesis": "x"})
         mock_k8s["patch_status"].assert_not_awaited()
 
@@ -123,6 +122,26 @@ class TestOnInvestigationResult:
         assert len(phase_calls) == 1
         assert phase_calls[0].args[2]["phase"] == IncidentPhase.REMEDIATION_PLANNED
 
+    async def test_result_without_escalate_creates_remediation_plan(self, mock_k8s) -> None:
+        result = {
+            "hypothesis": "OOM",
+            "confidence": 0.85,
+            "evidence": [],
+            "recommendedActions": [
+                {"type": "restart-pod", "target": {"kind": "Pod", "namespace": "default", "name": "p"}, "parameters": {}}
+            ],
+        }
+        body = make_investigation_body(phase="InProgress", incident_ref="inc-1")
+        await on_investigation_result(body=body, name="inv-1", namespace=NS, new=result)
+
+        mock_k8s["create_resource"].assert_awaited_once()
+        plural, rp_body = mock_k8s["create_resource"].call_args.args
+        assert plural == "remediationplans"
+        assert rp_body["spec"]["incidentRef"] == "inc-1"
+        assert rp_body["spec"]["investigationRef"] == "inv-1"
+        assert len(rp_body["spec"]["actions"]) == 1
+        assert rp_body["spec"]["actions"][0]["type"] == "restart-pod"
+
     async def test_result_with_escalate_true_transitions_incident_to_escalated(
         self, mock_k8s
     ) -> None:
@@ -135,41 +154,8 @@ class TestOnInvestigationResult:
         assert len(phase_calls) == 1
         assert phase_calls[0].args[2]["phase"] == IncidentPhase.ESCALATED
 
-
-# ---------------------------------------------------------------------------
-# on_investigation_phase_terminal
-# ---------------------------------------------------------------------------
-
-
-class TestOnInvestigationPhaseTerminal:
-    async def test_non_terminal_phase_skips(self, mock_k8s) -> None:
+    async def test_result_with_escalate_does_not_create_remediation_plan(self, mock_k8s) -> None:
+        result = {"hypothesis": "Unknown", "confidence": 0.1, "escalate": True}
         body = make_investigation_body(phase="InProgress", incident_ref="inc-1")
-        await on_investigation_phase_terminal(
-            body=body, name="inv-1", namespace=NS, new="InProgress"
-        )
-        mock_k8s["patch_status"].assert_not_awaited()
-
-    async def test_timed_out_escalates_incident(self, mock_k8s) -> None:
-        body = make_investigation_body(phase="TimedOut", incident_ref="inc-1")
-        await on_investigation_phase_terminal(
-            body=body, name="inv-1", namespace=NS, new="TimedOut"
-        )
-        calls = mock_k8s["patch_status"].call_args_list
-        incident_call = next(c for c in calls if c.args[0] == "incidents")
-        assert incident_call.args[2]["phase"] == IncidentPhase.ESCALATED
-
-    async def test_cancelled_escalates_incident(self, mock_k8s) -> None:
-        body = make_investigation_body(phase="Cancelled", incident_ref="inc-1")
-        await on_investigation_phase_terminal(
-            body=body, name="inv-1", namespace=NS, new="Cancelled"
-        )
-        calls = mock_k8s["patch_status"].call_args_list
-        incident_call = next(c for c in calls if c.args[0] == "incidents")
-        assert incident_call.args[2]["phase"] == IncidentPhase.ESCALATED
-
-    async def test_terminal_without_incident_ref_skips(self, mock_k8s) -> None:
-        body = make_investigation_body(phase="TimedOut", incident_ref="")
-        await on_investigation_phase_terminal(
-            body=body, name="inv-1", namespace=NS, new="TimedOut"
-        )
-        mock_k8s["patch_status"].assert_not_awaited()
+        await on_investigation_result(body=body, name="inv-1", namespace=NS, new=result)
+        mock_k8s["create_resource"].assert_not_awaited()

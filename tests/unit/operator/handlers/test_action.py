@@ -59,8 +59,8 @@ class TestOnActionResult:
         await on_action_result(body=body, name="ae-1", namespace=NS, new=None)
         mock_k8s["patch_status"].assert_not_awaited()
 
-    async def test_non_executing_phase_skips(self, mock_k8s) -> None:
-        body = make_action_execution_body(phase="Approved")
+    async def test_already_terminal_phase_skips(self, mock_k8s) -> None:
+        body = make_action_execution_body(phase="Succeeded")
         await on_action_result(body=body, name="ae-1", namespace=NS, new="done")
         mock_k8s["patch_status"].assert_not_awaited()
 
@@ -107,7 +107,7 @@ class TestOnActionResult:
 
         calls = mock_k8s["patch_status"].call_args_list
         ae_call = next(c for c in calls if c.args[0] == "actionexecutions")
-        assert "resolvedAt" in ae_call.args[2]
+        assert "completedAt" in ae_call.args[2]
 
     async def test_success_decrements_budget(self, mock_k8s) -> None:
         mock_k8s["get_resource"].return_value = make_incident_body(profile="allow-profile")

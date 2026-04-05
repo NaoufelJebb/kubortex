@@ -75,11 +75,13 @@ class TestOnApprovalDecision:
 
         mock_k8s["update_usage"].assert_awaited_once()
 
-    async def test_approved_ae_name_uses_incident_and_action_id(self, mock_k8s) -> None:
-        body = make_approval_request_body(name="ar-1", incident_ref="inc-test")
+    async def test_approved_ae_name_uses_investigation_and_action_id(self, mock_k8s) -> None:
+        body = make_approval_request_body(
+            name="ar-1", incident_ref="inc-test", investigation_ref="inv-inc-test"
+        )
         await on_approval_decision(body=body, name="ar-1", namespace=NS, new="approved", old=None)
         ae_body = mock_k8s["create_resource"].call_args.args[1]
-        assert ae_body["metadata"]["name"] == "ae-inc-test-action-1"
+        assert ae_body["metadata"]["name"] == "ae-inv-inc-test-action-1"
 
     async def test_rejected_patches_ar_and_escalates_incident(self, mock_k8s) -> None:
         body = make_approval_request_body(incident_ref="inc-1")

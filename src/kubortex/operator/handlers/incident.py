@@ -18,9 +18,9 @@ from kubernetes_asyncio.client import ApiException
 
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import AUTONOMY_PROFILES, INCIDENTS, INVESTIGATIONS
-from kubortex.shared.k8s import create_resource, get_resource, patch_status
+from kubortex.shared.crds import create_resource, get_resource, patch_status
 from kubortex.shared.models import IncidentSpec, IncidentStatus
-from kubortex.shared.models.autonomy import AutonomyScope
+from kubortex.shared.models.autonomy import AutonomyProfileSpec, AutonomyScope
 from kubortex.shared.types import IncidentPhase, InvestigationPhase
 
 logger = structlog.get_logger(__name__)
@@ -41,7 +41,7 @@ async def on_incident_create(
         namespace: Incident namespace.
     """
     spec = IncidentSpec.model_validate(body.get("spec", {}))
-    logger.info("incident_created", name=name, severity=spec.severity, category=spec.category)
+    logger.info("incident_created", name=name, severity=spec.severity, categories=spec.categories)
 
     # Match AutonomyProfile
     profile_name = await _match_autonomy_profile(spec, namespace)
@@ -58,23 +58,21 @@ async def on_incident_create(
             await _transition(name, namespace, IncidentPhase.ESCALATED, "AutonomyProfile not found")
             return
         raise
-    profile_spec = profile.get("spec", {})
-    deadline_minutes = profile_spec.get(
-        "escalationDeadlineMinutes", settings.escalation_deadline_minutes
-    )
+    parsed_profile = AutonomyProfileSpec.model_validate(profile.get("spec", {}))
+    deadline_minutes = parsed_profile.escalation_deadline_minutes
     deadline = datetime.now(UTC) + timedelta(minutes=deadline_minutes)
+    max_retries = parsed_profile.max_investigation_retries
 
     # Create Investigation CR (idempotent: 409 means it already exists from a previous attempt)
     inv_name = f"inv-{name}"
     incident_uid = body.get("metadata", {}).get("uid", "")
     inv_body = _build_investigation(inv_name, name, namespace, spec, uid=incident_uid)
     try:
-        await create_resource(INVESTIGATIONS, inv_body, namespace=namespace)
+        await create_resource(INVESTIGATIONS, inv_body)
         await patch_status(
             INVESTIGATIONS,
             inv_name,
             {"phase": InvestigationPhase.PENDING},
-            namespace=namespace,
         )
     except ApiException as exc:
         if exc.status == 409:
@@ -90,8 +88,8 @@ async def on_incident_create(
             "autonomyProfile": profile_name,
             "investigationRef": inv_name,
             "escalationDeadline": deadline.isoformat(),
+            "maxRetries": max_retries,
         },
-        namespace=namespace,
     )
     logger.info("incident_investigating", name=name, investigation=inv_name)
 
@@ -143,22 +141,39 @@ async def on_incident_failed(
             return
         raise
 
-    profile_spec = profile.get("spec", {})
-    deadline_minutes = profile_spec.get("escalationDeadlineMinutes", settings.escalation_deadline_minutes)
+    parsed_retry_profile = AutonomyProfileSpec.model_validate(profile.get("spec", {}))
+    deadline_minutes = parsed_retry_profile.escalation_deadline_minutes
     deadline = datetime.now(UTC) + timedelta(minutes=deadline_minutes)
 
     spec = IncidentSpec.model_validate(body.get("spec", {}))
     incident_uid = body.get("metadata", {}).get("uid", "")
     inv_name = f"inv-{name}-r{retry_count}"
-    inv_body = _build_investigation(inv_name, name, namespace, spec, uid=incident_uid)
+
+    # Collect prior attempt context from the previous investigation
+    prev_inv_name = status.get("investigationRef", "")
+    prior_attempts: list[dict] = []
+    if prev_inv_name:
+        try:
+            prev_inv = await get_resource(INVESTIGATIONS, prev_inv_name)
+            prev_result = (prev_inv.get("status") or {}).get("result", {})
+            if isinstance(prev_result, dict) and prev_result:
+                prior_attempts = [{
+                    "hypothesis": prev_result.get("hypothesis", ""),
+                    "failureReason": prev_result.get("escalationReason", "Action failed or rolled back"),
+                }]
+        except ApiException:
+            pass
+
+    inv_body = _build_investigation(
+        inv_name, name, namespace, spec, uid=incident_uid, prior_attempts=prior_attempts
+    )
 
     try:
-        await create_resource(INVESTIGATIONS, inv_body, namespace=namespace)
+        await create_resource(INVESTIGATIONS, inv_body)
         await patch_status(
             INVESTIGATIONS,
             inv_name,
             {"phase": InvestigationPhase.PENDING},
-            namespace=namespace,
         )
     except ApiException as exc:
         if exc.status == 409:
@@ -174,7 +189,6 @@ async def on_incident_failed(
             "investigationRef": inv_name,
             "escalationDeadline": deadline.isoformat(),
         },
-        namespace=namespace,
     )
     logger.info("incident_retry_investigating", name=name, investigation=inv_name, attempt=retry_count)
 
@@ -224,7 +238,7 @@ async def _get_namespace_labels(namespace: str) -> dict[str, str]:
             ns_obj = await v1.read_namespace(namespace, _request_timeout=3.0)
         return dict(ns_obj.metadata.labels or {})
     except Exception:
-        logger.warning("namespace_labels_unreadable", namespace=namespace)
+        logger.warning("namespace_labels_unreadable")
         return {}
 
 
@@ -246,7 +260,7 @@ def _scope_matches(
     """
     if scope.severities and spec.severity not in scope.severities:
         return False
-    if scope.categories and spec.category not in scope.categories:
+    if scope.categories and not any(c in scope.categories for c in spec.categories):
         return False
 
     ns_sel = scope.namespaces
@@ -300,9 +314,9 @@ async def _match_autonomy_profile(spec: IncidentSpec, namespace: str) -> str | N
     Returns:
         Name of the best-matching profile, or ``None`` when none match.
     """
-    from kubortex.shared.k8s import list_resources
+    from kubortex.shared.crds import list_resources
 
-    profiles = await list_resources(AUTONOMY_PROFILES, namespace=namespace)
+    profiles = await list_resources(AUTONOMY_PROFILES)
 
     # Fetch namespace labels once — needed only when any profile uses matchLabels
     target_ns = spec.target_ref.namespace if spec.target_ref else None
@@ -341,26 +355,32 @@ async def _transition(name: str, namespace: str, phase: IncidentPhase, detail: s
         phase: New incident phase.
         detail: Timeline detail for the transition.
     """
+    try:
+        resource = await get_resource(INCIDENTS, name)
+        existing_timeline = (resource.get("status") or {}).get("timeline", [])
+    except ApiException:
+        existing_timeline = []
+    new_entry = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "event": "PhaseTransition",
+        "detail": detail,
+    }
     await patch_status(
         INCIDENTS,
         name,
-        {
-            "phase": phase,
-            "timeline": [
-                {
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "event": "PhaseTransition",
-                    "detail": detail,
-                }
-            ],
-        },
-        namespace=namespace,
+        {"phase": phase, "timeline": existing_timeline + [new_entry]},
     )
     logger.info("incident_transitioned", name=name, phase=phase, detail=detail)
 
 
 def _build_investigation(
-    inv_name: str, incident_name: str, namespace: str, spec: IncidentSpec, *, uid: str
+    inv_name: str,
+    incident_name: str,
+    namespace: str,
+    spec: IncidentSpec,
+    *,
+    uid: str,
+    prior_attempts: list[dict] | None = None,
 ) -> dict[str, Any]:
     """Build an Investigation resource body from an incident.
 
@@ -370,6 +390,7 @@ def _build_investigation(
         namespace: Resource namespace.
         spec: Incident spec.
         uid: UID of the parent Incident (required by K8s ownerReferences).
+        prior_attempts: Context from previous failed investigation attempts.
 
     Returns:
         Investigation custom resource body.
@@ -382,7 +403,7 @@ def _build_investigation(
             "namespace": namespace,
             "labels": {
                 "kubortex.io/incident": incident_name,
-                "kubortex.io/category": spec.category,
+                "kubortex.io/category": spec.categories[0] if spec.categories else "",
             },
             "ownerReferences": [
                 {
@@ -396,12 +417,13 @@ def _build_investigation(
         },
         "spec": {
             "incidentRef": incident_name,
-            "category": spec.category,
+            "categories": [c.value for c in spec.categories],
             "severity": spec.severity,
             "summary": spec.summary,
             "targetRef": (spec.target_ref.model_dump() if spec.target_ref else None),
             "signals": [s.model_dump(by_alias=True) for s in spec.signals],
+            "priorAttempts": prior_attempts or [],
             "maxIterations": settings.investigation_max_iterations,
-            "deadlineSeconds": settings.investigation_timeout_seconds,
+            "timeoutSeconds": settings.investigation_timeout_seconds,
         },
     }

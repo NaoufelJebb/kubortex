@@ -33,7 +33,7 @@ class TestBuildInvestigation:
     def _spec(self, **kwargs) -> IncidentSpec:
         base: dict[str, Any] = {
             "severity": "high",
-            "category": "error-rate",
+            "categories": ["error-rate"],
             "summary": "Test",
             "signals": [],
         }
@@ -57,7 +57,7 @@ class TestBuildInvestigation:
         body = _build_investigation("inv-1", "inc-1", "ns", spec, uid="test-uid")
         labels = body["metadata"]["labels"]
         assert labels["kubortex.io/incident"] == "inc-1"
-        assert labels["kubortex.io/category"] == spec.category
+        assert labels["kubortex.io/category"] == spec.categories[0]
 
     def test_spec_fields_from_incident(self) -> None:
         spec = self._spec()
@@ -65,13 +65,13 @@ class TestBuildInvestigation:
         s = body["spec"]
         assert s["incidentRef"] == "inc-1"
         assert s["severity"] == spec.severity
-        assert s["category"] == spec.category
+        assert s["categories"] == [c.value for c in spec.categories]
         assert s["summary"] == spec.summary
 
     def test_max_iterations_and_timeout_from_settings(self) -> None:
         body = _build_investigation("inv-1", "inc-1", "ns", self._spec(), uid="test-uid")
         assert body["spec"]["maxIterations"] == settings.investigation_max_iterations
-        assert body["spec"]["deadlineSeconds"] == settings.investigation_timeout_seconds
+        assert body["spec"]["timeoutSeconds"] == settings.investigation_timeout_seconds
 
     def test_target_ref_included_when_present(self) -> None:
         spec = self._spec(targetRef={"kind": "Deployment", "namespace": "ns", "name": "app"})
@@ -111,7 +111,7 @@ class TestScopeMatches:
         category: str = "error-rate",
         target_ns: str | None = None,
     ) -> IncidentSpec:
-        data: dict[str, Any] = {"severity": severity, "category": category, "summary": "t"}
+        data: dict[str, Any] = {"severity": severity, "categories": [category], "summary": "t"}
         if target_ns is not None:
             data["targetRef"] = {"kind": "Deployment", "namespace": target_ns, "name": "app"}
         return IncidentSpec.model_validate(data)

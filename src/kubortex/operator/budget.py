@@ -12,12 +12,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
 
 import structlog
 from kubernetes_asyncio.client import ApiException
 
-from kubortex.shared.k8s import get_resource, patch_status, patch_status_versioned
+from kubortex.shared.crds import get_resource, patch_status
 from kubortex.shared.models.autonomy import Budgets, BudgetUsage
 
 logger = structlog.get_logger(__name__)
@@ -125,8 +124,6 @@ def decrement_active(usage: BudgetUsage) -> BudgetUsage:
 async def update_usage(
     profile_name: str,
     transform: Callable[[BudgetUsage], BudgetUsage],
-    *,
-    namespace: str | None = None,
 ) -> BudgetUsage:
     """Atomically read, transform, and write budget usage.
 
@@ -141,7 +138,6 @@ async def update_usage(
     Args:
         profile_name: AutonomyProfile name.
         transform: Pure function that maps current usage to updated usage.
-        namespace: Override namespace (defaults to operator namespace).
 
     Returns:
         The committed ``BudgetUsage`` after a successful write.
@@ -151,23 +147,18 @@ async def update_usage(
             or if the error is not a 409.
         Exception: Re-raised if the profile cannot be fetched.
     """
-    kwargs: dict[str, Any] = {}
-    if namespace is not None:
-        kwargs["namespace"] = namespace
-
     for attempt in range(_MAX_RETRIES):
-        resource = await get_resource(AUTONOMY_PLURAL, profile_name, **kwargs)
+        resource = await get_resource(AUTONOMY_PLURAL, profile_name)
         rv = resource["metadata"]["resourceVersion"]
         raw = (resource.get("status") or {}).get("budgetUsage", {})
         current = BudgetUsage.model_validate(raw)
         updated = transform(current)
         try:
-            await patch_status_versioned(
+            await patch_status(
                 AUTONOMY_PLURAL,
                 profile_name,
-                rv,
                 {"budgetUsage": updated.model_dump(by_alias=True)},
-                **kwargs,
+                resource_version=rv,
             )
             logger.info("budget_updated", profile=profile_name, attempt=attempt)
             return updated
@@ -180,22 +171,18 @@ async def update_usage(
     raise RuntimeError("unreachable")  # pragma: no cover
 
 
-async def load_usage(profile_name: str, *, namespace: str | None = None) -> BudgetUsage:
+async def load_usage(profile_name: str) -> BudgetUsage:
     """Load budget usage from an autonomy profile (read-only).
 
     Prefer ``update_usage`` for any read-modify-write pattern.
 
     Args:
         profile_name: AutonomyProfile name.
-        namespace: Override namespace.
 
     Returns:
         Current budget usage.
     """
-    kwargs: dict[str, Any] = {}
-    if namespace is not None:
-        kwargs["namespace"] = namespace
-    resource = await get_resource(AUTONOMY_PLURAL, profile_name, **kwargs)
+    resource = await get_resource(AUTONOMY_PLURAL, profile_name)
     raw = (resource.get("status") or {}).get("budgetUsage", {})
     return BudgetUsage.model_validate(raw)
 

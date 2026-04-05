@@ -175,6 +175,7 @@ def make_remediation_plan_body(
 def make_approval_request_body(
     name: str = "ar-test",
     incident_ref: str = "inc-test",
+    investigation_ref: str = "inv-inc-test",
     phase: str = "Pending",
     decision: str | None = None,
     timeout_minutes: int = 30,
@@ -193,6 +194,7 @@ def make_approval_request_body(
         "metadata": metadata,
         "spec": {
             "incidentRef": incident_ref,
+            "investigationRef": investigation_ref,
             "remediationPlanRef": "rp-test",
             "action": {
                 "id": "action-1",
@@ -290,7 +292,7 @@ def mock_k8s(monkeypatch) -> dict:
     )
 
     for fn in k8s_fns:
-        monkeypatch.setattr(f"kubortex.shared.k8s.{fn}", mocks[fn])
+        monkeypatch.setattr(f"kubortex.shared.crds.{fn}", mocks[fn])
     for fn in budget_fns:
         monkeypatch.setattr(f"kubortex.operator.budget.{fn}", mocks[fn], raising=False)
 

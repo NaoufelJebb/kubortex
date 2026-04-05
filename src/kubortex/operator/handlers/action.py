@@ -15,7 +15,7 @@ from kubernetes_asyncio.client import ApiException
 
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import ACTION_EXECUTIONS, INCIDENTS
-from kubortex.shared.k8s import get_resource, patch_status
+from kubortex.shared.crds import get_resource, patch_status
 from kubortex.shared.types import ActionExecutionPhase, IncidentPhase
 
 from ..budget import decrement_active, load_usage, persist_usage
@@ -57,7 +57,6 @@ async def on_action_claimed(
             ACTION_EXECUTIONS,
             name,
             {"phase": ActionExecutionPhase.EXECUTING},
-            namespace=namespace,
         )
     except ApiException as exc:
         if exc.status == 404:
@@ -83,7 +82,7 @@ async def on_action_result(
     1. ``status.error`` present → Failed; delegates to ``_handle_failure``.
     2. ``status.verification.improved=False`` and rollback was triggered
        → RolledBack; delegates to ``_handle_failure``.
-    3. Otherwise → Succeeded; stamps ``resolvedAt``, decrements the active
+    3. Otherwise → Succeeded; stamps ``completedAt``, decrements the active
        remediation budget, and transitions Incident → Resolved.
 
     Guard: phase must be Executing to prevent duplicate processing.
@@ -94,10 +93,14 @@ async def on_action_result(
         namespace: ActionExecution namespace.
         new: Result value written by the remediator worker.
     """
-    if not new:
+    if new is None:
         return
     status = body.get("status", {})
-    if status.get("phase") != ActionExecutionPhase.EXECUTING:
+    if status.get("phase") in (
+        ActionExecutionPhase.SUCCEEDED,
+        ActionExecutionPhase.FAILED,
+        ActionExecutionPhase.ROLLED_BACK,
+    ):
         return
 
     incident_ref = body.get("spec", {}).get("incidentRef", "")
@@ -112,7 +115,6 @@ async def on_action_result(
                 ACTION_EXECUTIONS,
                 name,
                 {"phase": ActionExecutionPhase.FAILED},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status != 404:
@@ -120,13 +122,12 @@ async def on_action_result(
         if incident_ref:
             await _handle_failure(incident_ref, namespace)
         logger.warning("action_failed", name=name, error=status.get("error"))
-    elif improved is False and status.get("rollback", {}).get("triggered"):
+    elif improved is False:
         try:
             await patch_status(
                 ACTION_EXECUTIONS,
                 name,
                 {"phase": ActionExecutionPhase.ROLLED_BACK},
-                namespace=namespace,
             )
         except ApiException as exc:
             if exc.status != 404:
@@ -139,15 +140,14 @@ async def on_action_result(
             await patch_status(
                 ACTION_EXECUTIONS,
                 name,
-                {"phase": ActionExecutionPhase.SUCCEEDED, "resolvedAt": datetime.now(UTC).isoformat()},
-                namespace=namespace,
+                {"phase": ActionExecutionPhase.SUCCEEDED, "completedAt": datetime.now(UTC).isoformat()},
             )
         except ApiException as exc:
             if exc.status != 404:
                 raise
         if incident_ref:
             try:
-                incident = await get_resource(INCIDENTS, incident_ref, namespace=namespace)
+                incident = await get_resource(INCIDENTS, incident_ref)
                 profile_name = (incident.get("status") or {}).get("autonomyProfile", "")
                 if profile_name:
                     usage = await load_usage(profile_name)
@@ -156,8 +156,7 @@ async def on_action_result(
                 await patch_status(
                     INCIDENTS,
                     incident_ref,
-                    {"phase": IncidentPhase.RESOLVED},
-                    namespace=namespace,
+                    {"phase": IncidentPhase.RESOLVED, "resolvedAt": datetime.now(UTC).isoformat()},
                 )
             except ApiException as exc:
                 if exc.status != 404:
@@ -183,7 +182,7 @@ async def _handle_failure(incident_ref: str, namespace: str) -> None:
         namespace: Namespace of the parent Incident.
     """
     try:
-        incident = await get_resource("incidents", incident_ref, namespace=namespace)
+        incident = await get_resource("incidents", incident_ref)
     except ApiException as exc:
         if exc.status == 404:
             logger.warning("incident_gone_on_action_failure", incident=incident_ref)
@@ -213,7 +212,6 @@ async def _handle_failure(incident_ref: str, namespace: str) -> None:
                 "phase": IncidentPhase.FAILED,
                 "retryCount": retry_count + 1,
             },
-            namespace=namespace,
         )
         logger.info("incident_retry", name=incident_ref, attempt=retry_count + 1)
     else:
@@ -221,6 +219,5 @@ async def _handle_failure(incident_ref: str, namespace: str) -> None:
             INCIDENTS,
             incident_ref,
             {"phase": IncidentPhase.ESCALATED},
-            namespace=namespace,
         )
         logger.warning("incident_escalated_max_retries", name=incident_ref)

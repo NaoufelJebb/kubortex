@@ -10,7 +10,7 @@ import structlog
 
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import AUTONOMY_PROFILES
-from kubortex.shared.k8s import patch_status
+from kubortex.shared.crds import patch_status
 from kubortex.shared.models.autonomy import AutonomyProfileSpec
 
 logger = structlog.get_logger(__name__)
@@ -108,6 +108,5 @@ async def reset_budget_counters(
             AUTONOMY_PROFILES,
             name,
             {"budgetUsage": usage},
-            namespace=namespace,
         )
         logger.debug("budget_counters_reset", profile=name)
