@@ -94,6 +94,7 @@ slack:
   botToken: ""
   channel: "#sre-oncall"
   escalationChannel: "#sre-escalations"
+  apiBaseUrl: ""
   # Name of an existing Secret with KUBORTEX_SLACK_BOT_TOKEN, KUBORTEX_SLACK_CHANNEL,
   # and KUBORTEX_SLACK_ESCALATION_CHANNEL keys
   existingSecret: ""

@@ -135,7 +135,7 @@ class TestReceiveAlerts:
     ) -> None:
         payload = _make_payload(make_alert())
         resp = client.post("/api/v1/alerts", json=payload)
-        assert resp.text == "processed 1 signals"
+        assert resp.json() == {"accepted": 1, "incidents": 1}
 
     def test_invalid_alert_shape_returns_400(self, client: TestClient, monkeypatch) -> None:
         monkeypatch.setattr("kubortex.edge.core.ingester.correlate_and_upsert", AsyncMock())

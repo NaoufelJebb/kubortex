@@ -90,7 +90,6 @@ class IncidentStatus(BaseModel):
     retry_count: int = Field(0, alias="retryCount")
     max_retries: int = Field(2, alias="maxRetries")
     resolved_at: datetime | None = Field(None, alias="resolvedAt")
-    conditions: list[Condition] = Field(default_factory=list)
     timeline: list[TimelineEntry] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}

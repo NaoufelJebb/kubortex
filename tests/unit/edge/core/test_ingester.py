@@ -130,7 +130,7 @@ class TestHandler:
         client = self._client(_FakeSource(signals=[]))
         resp = client.post("/api/v1/fake", json={})
         assert resp.status_code == 200
-        assert resp.text == "no signals"
+        assert resp.json() == {"accepted": 0}
         _mock_correlate.assert_not_awaited()
 
     def test_single_signal_calls_correlate_once(self, _mock_correlate) -> None:
@@ -144,7 +144,19 @@ class TestHandler:
         parsed = _make_parsed(n=3, target=make_target_ref(name="app"))
         client = self._client(_FakeSource(signals=parsed))
         resp = client.post("/api/v1/fake", json={})
-        assert resp.text == "processed 3 signals"
+        assert resp.json() == {"accepted": 3, "incidents": 1}
+
+    def test_response_has_json_content_type(self, _mock_correlate) -> None:
+        parsed = _make_parsed(n=1)
+        client = self._client(_FakeSource(signals=parsed))
+        resp = client.post("/api/v1/fake", json={})
+        assert resp.headers["content-type"].startswith("application/json")
+
+    def test_empty_response_has_json_content_type(self, _mock_correlate) -> None:
+        client = self._client(_FakeSource(signals=[]))
+        resp = client.post("/api/v1/fake", json={})
+        assert resp.json() == {"accepted": 0}
+        assert resp.headers["content-type"].startswith("application/json")
 
     def test_signals_same_group_produce_one_correlate_call(self, _mock_correlate) -> None:
         target = make_target_ref(name="api")

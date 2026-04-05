@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi.testclient import TestClient
+from kubernetes_asyncio import config as k8s_config
 
 import kubortex.edge.main as main_module
 from kubortex.edge.main import create_app
@@ -101,3 +103,67 @@ class TestLifespan:
 
         assert response.status_code == 503
         assert response.json() == {"status": "not_ready"}
+
+
+# ---------------------------------------------------------------------------
+# _bootstrap_kubernetes — exception chaining
+# ---------------------------------------------------------------------------
+
+
+class TestBootstrapKubernetes:
+    @pytest.mark.asyncio
+    async def test_chains_exception_when_both_methods_fail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """When both config methods fail the second exception chains the first."""
+        in_cluster_exc = k8s_config.ConfigException("not in cluster")
+        kube_exc = Exception("no kubeconfig")
+
+        monkeypatch.setattr(
+            main_module.k8s_config,
+            "load_incluster_config",
+            lambda: (_ for _ in ()).throw(in_cluster_exc),
+        )
+
+        async def _fail_kubeconfig():
+            raise kube_exc
+
+        monkeypatch.setattr(main_module.k8s_config, "load_kube_config", _fail_kubeconfig)
+
+        with pytest.raises(Exception) as exc_info:
+            await main_module._bootstrap_kubernetes()
+
+        assert exc_info.value is kube_exc
+        assert exc_info.value.__cause__ is in_cluster_exc
+
+    @pytest.mark.asyncio
+    async def test_succeeds_with_kubeconfig_when_not_in_cluster(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Fallback to kubeconfig succeeds silently when in-cluster config is absent."""
+        monkeypatch.setattr(
+            main_module.k8s_config,
+            "load_incluster_config",
+            lambda: (_ for _ in ()).throw(k8s_config.ConfigException("not in cluster")),
+        )
+
+        async def _ok():
+            pass
+
+        monkeypatch.setattr(main_module.k8s_config, "load_kube_config", _ok)
+
+        await main_module._bootstrap_kubernetes()  # must not raise
+
+    @pytest.mark.asyncio
+    async def test_succeeds_with_incluster_config(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """In-cluster config success skips kubeconfig entirely."""
+        monkeypatch.setattr(main_module.k8s_config, "load_incluster_config", lambda: None)
+
+        async def _should_not_be_called():
+            raise AssertionError("kubeconfig should not be loaded when in-cluster succeeds")
+
+        monkeypatch.setattr(main_module.k8s_config, "load_kube_config", _should_not_be_called)
+
+        await main_module._bootstrap_kubernetes()  # must not raise

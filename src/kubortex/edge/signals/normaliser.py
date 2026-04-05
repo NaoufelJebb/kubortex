@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
+
 from kubortex.edge.core.resolver import TargetHints, resolve_target
 from kubortex.shared.models.incident import Signal, TargetRef
 from kubortex.shared.types import Category, Severity
@@ -17,6 +19,8 @@ _SEVERITY_MAP: dict[str, Severity] = {
     "info": Severity.INFO,
     "none": Severity.INFO,
 }
+
+logger = structlog.get_logger(__name__)
 
 _CATEGORY_KEYWORDS: dict[str, Category] = {
     "cpu": Category.RESOURCE_SATURATION,
@@ -42,7 +46,21 @@ def normalise_severity(raw: str) -> Severity:
 
 
 def infer_category(alertname: str, labels: dict[str, str]) -> Category:
-    """Infer a Kubortex category from alert metadata."""
+    """Infer a Kubortex category from alert metadata.
+
+    Checks for an explicit ``kubortex.io/category``, ``kubortex_category``, or
+    ``category`` label first. Falls back to keyword scanning of the alert name.
+    If an explicit label is present but holds an invalid value, a warning is
+    logged and keyword inference is attempted instead.
+
+    Args:
+        alertname: Alertmanager alert name used for keyword inference.
+        labels: Alert label map from the Alertmanager payload.
+
+    Returns:
+        Best-matched ``Category`` enum value, or ``Category.CUSTOM`` when no
+        keyword matches.
+    """
     explicit = (
         labels.get("kubortex.io/category")
         or labels.get("kubortex_category")
@@ -52,7 +70,11 @@ def infer_category(alertname: str, labels: dict[str, str]) -> Category:
         try:
             return Category(explicit)
         except ValueError:
-            pass
+            logger.warning(
+                "invalid_category_label",
+                value=explicit,
+                alertname=alertname,
+            )
 
     lower = alertname.lower()
     compact = lower.replace("_", "").replace("-", "")

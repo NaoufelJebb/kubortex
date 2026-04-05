@@ -106,12 +106,6 @@ spec:
                     type: object
                     description: Single timeline entry.
                     x-kubernetes-preserve-unknown-fields: true
-                conditions:
-                  type: array
-                  description: Standard Kubernetes status conditions.
-                  items:
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
       additionalPrinterColumns:
         - name: Phase
           type: string

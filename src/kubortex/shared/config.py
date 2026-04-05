@@ -29,7 +29,7 @@ class EdgeSettings(SharedSettings):
     Env vars (prefix: ``KUBORTEX_``):
     - ``KUBORTEX_HOST``, ``KUBORTEX_PORT``
     - ``KUBORTEX_SLACK_BOT_TOKEN``, ``KUBORTEX_SLACK_CHANNEL``,
-      ``KUBORTEX_SLACK_ESCALATION_CHANNEL``
+      ``KUBORTEX_SLACK_ESCALATION_CHANNEL``, ``KUBORTEX_SLACK_API_BASE_URL``
     """
 
     # -- HTTP server ---------------------------------------------------------
@@ -40,6 +40,7 @@ class EdgeSettings(SharedSettings):
     slack_bot_token: str = ""
     slack_channel: str = "#sre-oncall"
     slack_escalation_channel: str = "#sre-escalations"
+    slack_api_base_url: str = ""
 
     # -- Signal correlation --------------------------------------------------
     correlation_window_seconds: int = 300
@@ -134,12 +135,6 @@ class InvestigatorSettings(SharedSettings):
 
     # -- Context budget (tokens, maps directly to model context window) ------
     context_max_tokens: int = 30_000
-
-    # -- LLM generation ------------------------------------------------------
-    llm_temperature: float = 0.0
-
-    # -- Graph node limits ---------------------------------------------------
-    evidence_summary_max_chars: int = 2_000
 
     # -- LLM generation ------------------------------------------------------
     llm_temperature: float = 0.0

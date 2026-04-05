@@ -40,6 +40,8 @@ spec:
               value: {{ .Values.edge.port | quote }}
             - name: KUBORTEX_CORRELATION_WINDOW_SECONDS
               value: {{ .Values.edge.correlationWindowSeconds | quote }}
+            - name: KUBORTEX_SLACK_API_BASE_URL
+              value: {{ .Values.slack.apiBaseUrl | quote }}
           envFrom:
             - secretRef:
                 name: {{ include "kubortex.slackSecretName" . }}

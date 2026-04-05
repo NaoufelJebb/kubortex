@@ -87,6 +87,19 @@ class TestInferCategory:
         labels = {"category": "garbage"}
         assert infer_category("SomethingWeird", labels) == Category.CUSTOM
 
+    def test_invalid_explicit_category_logs_warning(self) -> None:
+        """Invalid category label triggers a structured warning log."""
+        import structlog.testing
+
+        with structlog.testing.capture_logs() as logs:
+            result = infer_category("HighCpuUsage", {"kubortex_category": "not-valid"})
+
+        assert result == Category.RESOURCE_SATURATION
+        assert any(
+            log.get("event") == "invalid_category_label" and log.get("value") == "not-valid"
+            for log in logs
+        )
+
 
 class TestExtractTargetHints:
     def test_extracts_workload_and_namespace_hints(self) -> None:

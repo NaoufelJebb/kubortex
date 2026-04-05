@@ -30,10 +30,6 @@ class IncidentPayload(CommonPayload, total=False):
     proposedActionCount: int
 
 
-class InvestigationPayload(IncidentPayload, total=False):
-    pass
-
-
 class ApprovalPayload(CommonPayload, total=False):
     actionType: str
     remediationPlanRef: str

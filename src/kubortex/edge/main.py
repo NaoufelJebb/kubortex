@@ -13,10 +13,10 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from kubernetes_asyncio import config as k8s_config
 
+from kubortex.edge.core.ingester import SignalIngester
 from kubortex.edge.core.router import NotificationRouter
 from kubortex.edge.notifications.slack import SlackNotifier
 from kubortex.edge.signals.alertmanager import AlertmanagerSource
-from kubortex.edge.core.ingester import SignalIngester
 from kubortex.shared.config import EdgeSettings
 from kubortex.shared.logging import configure_logging
 
@@ -72,10 +72,22 @@ def create_app(settings: EdgeSettings | None = None) -> FastAPI:
 
 
 async def _bootstrap_kubernetes() -> None:
+    """Load Kubernetes client configuration from the environment.
+
+    Attempts in-cluster configuration first, then falls back to the local
+    kubeconfig file. If both methods fail, raises the second exception with
+    the original ``ConfigException`` chained as its cause.
+
+    Raises:
+        Exception: If both in-cluster and kubeconfig loading fail.
+    """
     try:
         k8s_config.load_incluster_config()
-    except k8s_config.ConfigException:
-        await k8s_config.load_kube_config()
+    except k8s_config.ConfigException as exc:
+        try:
+            await k8s_config.load_kube_config()
+        except Exception as kube_exc:
+            raise kube_exc from exc
 
 
 def main() -> None:  # pragma: no cover

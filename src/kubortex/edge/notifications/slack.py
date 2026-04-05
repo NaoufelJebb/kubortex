@@ -6,14 +6,14 @@ same incident are threaded under the initial detection message.
 
 from __future__ import annotations
 
+import collections
 from typing import Any
 
 import structlog
 from slack_sdk.web.async_client import AsyncWebClient
 
-from kubortex.shared.config import EdgeSettings
-
 from kubortex.edge.core.events import DomainEvent
+from kubortex.shared.config import EdgeSettings
 
 logger = structlog.get_logger(__name__)
 
@@ -32,8 +32,14 @@ _TEMPLATES: dict[str, tuple[str, str]] = {
     "ApprovalRequired": (":raised_hand:", "Approval required for action: `{resourceName}`"),
     "ActionExecuted": (":gear:", "Executing action: `{resourceName}`"),
     "ActionSucceeded": (":tada:", "Action succeeded: `{resourceName}`"),
-    "ApprovalRejected": (":no_entry_sign:", "Approval rejected for `{actionType}` on `{targetName}`"),
-    "ApprovalTimedOut": (":alarm_clock:", "Approval timed out for `{actionType}` on `{targetName}`"),
+    "ApprovalRejected": (
+        ":no_entry_sign:",
+        "Approval rejected for `{actionType}` on `{targetName}`",
+    ),
+    "ApprovalTimedOut": (
+        ":alarm_clock:",
+        "Approval timed out for `{actionType}` on `{targetName}`",
+    ),
     "ActionFailed": (":x:", "Action failed for `{actionType}` on `{targetName}`"),
     "IncidentFailed": (":warning:", "Incident retry triggered: *{summary}*"),
     "IncidentResolved": (":green_circle:", "Incident resolved: `{incidentName}`"),
@@ -45,11 +51,21 @@ class SlackNotifier:
     """Sends domain events to Slack threads by incident."""
 
     def __init__(self, settings: EdgeSettings | None = None) -> None:
+        """Initialise the Slack notifier.
+
+        Args:
+            settings: Edge settings containing Slack credentials and channel
+                names. Defaults to ``EdgeSettings()`` when not provided.
+        """
         self._settings = settings or EdgeSettings()
-        self._client = AsyncWebClient(token=self._settings.slack_bot_token)
+        client_kwargs: dict[str, Any] = {"token": self._settings.slack_bot_token}
+        if self._settings.slack_api_base_url:
+            client_kwargs["base_url"] = self._settings.slack_api_base_url
+        self._client = AsyncWebClient(**client_kwargs)
         self._channel = self._settings.slack_channel
         self._escalation_channel = self._settings.slack_escalation_channel
-        self._threads: dict[tuple[str, str], str] = {}
+        self._threads: collections.OrderedDict[tuple[str, str], str] = collections.OrderedDict()
+        self._threads_maxlen: int = 2048
 
     async def send(self, event: DomainEvent) -> None:
         """Render and send a domain event.
@@ -81,7 +97,10 @@ class SlackNotifier:
             if event.event_type == "IncidentDetected" and response.get("ok"):
                 ts = response.get("ts", "")
                 if ts:
-                    self._threads[(channel, event.incident_name)] = ts
+                    key = (channel, event.incident_name)
+                    if len(self._threads) >= self._threads_maxlen:
+                        self._threads.popitem(last=False)  # evict oldest
+                    self._threads[key] = ts
 
             logger.debug(
                 "slack_message_sent",

@@ -41,6 +41,7 @@ class IncidentPhase(StrEnum):
     RESOLVED = "Resolved"
     FAILED = "Failed"
     ESCALATED = "Escalated"
+    SUPPRESSED = "Suppressed"
 
 
 class InvestigationPhase(StrEnum):

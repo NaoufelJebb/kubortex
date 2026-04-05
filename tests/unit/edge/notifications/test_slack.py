@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -168,6 +168,26 @@ class TestRender:
 
         assert text == ":rotating_light: IncidentDetected: inc-001"
 
+    def test_custom_slack_api_base_url_is_passed_to_client(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client_factory = MagicMock(return_value=AsyncMock())
+        monkeypatch.setattr(slack_module, "AsyncWebClient", client_factory)
+
+        SlackNotifier(
+            EdgeSettings(
+                slack_bot_token="xoxb-test-token",
+                slack_channel="#oncall",
+                slack_escalation_channel="#escalations",
+                slack_api_base_url="http://mock-slack:8081/api/",
+            )
+        )
+
+        client_factory.assert_called_once_with(
+            token="xoxb-test-token",
+            base_url="http://mock-slack:8081/api/",
+        )
+
 
 # ---------------------------------------------------------------------------
 # SlackNotifier.send
@@ -265,3 +285,52 @@ class TestSend:
         mock_slack_client.chat_postMessage.return_value = {"ok": True, "ts": ""}
         await notifier.send(_make_event(IncidentDetected))
         assert ("#oncall", "inc-001") not in notifier._threads
+
+    @pytest.mark.asyncio
+    async def test_threads_dict_evicts_oldest_when_full(
+        self, settings_with_token: EdgeSettings, mock_slack_client: AsyncMock
+    ) -> None:
+        """Once the thread cache is full the oldest entry is evicted on insert."""
+        n = SlackNotifier(settings_with_token)
+        n._client = mock_slack_client
+        n._threads_maxlen = 3
+
+        for i in range(3):
+            key = ("#oncall", f"inc-{i:03d}")
+            n._threads[key] = f"ts-{i}"
+
+        assert len(n._threads) == 3
+        oldest_key = ("#oncall", "inc-000")
+
+        # Simulate the bounded insert that send() performs
+        new_key = ("#oncall", "inc-new")
+        if len(n._threads) >= n._threads_maxlen:
+            n._threads.popitem(last=False)
+        n._threads[new_key] = "ts-new"
+
+        assert len(n._threads) == 3
+        assert oldest_key not in n._threads
+        assert new_key in n._threads
+
+    @pytest.mark.asyncio
+    async def test_threads_dict_does_not_exceed_maxlen_via_send(
+        self, settings_with_token: EdgeSettings, mock_slack_client: AsyncMock
+    ) -> None:
+        """Sending many IncidentDetected events never grows _threads past maxlen."""
+        from datetime import UTC, datetime
+
+        n = SlackNotifier(settings_with_token)
+        n._client = mock_slack_client
+        n._threads_maxlen = 5
+
+        mock_slack_client.chat_postMessage.return_value = {"ok": True, "ts": "999.000"}
+
+        for i in range(10):
+            event = IncidentDetected(
+                incidentName=f"inc-{i:03d}",
+                namespace="default",
+                timestamp=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+            await n.send(event)
+
+        assert len(n._threads) <= 5

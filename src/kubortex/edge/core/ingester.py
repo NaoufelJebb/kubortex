@@ -11,7 +11,8 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 import structlog
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from kubortex.shared.config import EdgeSettings
 from kubortex.shared.models.incident import Signal, TargetRef
@@ -74,13 +75,20 @@ class SignalIngester:
         )
 
     def _make_handler(self, source: SignalSource):
-        namespace = self._settings.namespace
-        crd_group = self._settings.crd_group
-        crd_version = self._settings.crd_version
-        correlation_window_seconds = self._settings.correlation_window_seconds
-        max_signals = self._settings.max_signals_per_incident
+        """Build the FastAPI request handler for a registered signal source.
 
-        async def _handler(request: Request) -> Response:
+        Closes over the current settings so the returned handler can be
+        registered as a standalone callable with FastAPI.
+
+        Args:
+            source: The signal source whose webhook this handler serves.
+
+        Returns:
+            An async callable suitable for ``APIRouter.add_api_route``.
+        """
+        settings = self._settings
+
+        async def _handler(request: Request) -> JSONResponse:
             try:
                 body = await request.json()
             except ValueError as exc:
@@ -97,7 +105,7 @@ class SignalIngester:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
 
             if not parsed:
-                return Response(status_code=200, content="no signals")
+                return JSONResponse(status_code=200, content={"accepted": 0})
 
             # Group by target identity only — category is not part of the key.
             # Signals from different categories targeting the same workload are
@@ -117,12 +125,12 @@ class SignalIngester:
                     signals,
                     categories,
                     target,
-                    namespace,
-                    crd_group,
-                    crd_version,
-                    correlation_window_seconds,
+                    settings.namespace,
+                    settings.crd_group,
+                    settings.crd_version,
+                    settings.correlation_window_seconds,
                     source=source.source_name,
-                    max_signals=max_signals,
+                    max_signals=settings.max_signals_per_incident,
                 )
                 created.append(inc_name)
 
@@ -132,6 +140,9 @@ class SignalIngester:
                 signal_count=len(parsed),
                 incident_count=len(created),
             )
-            return Response(status_code=200, content=f"processed {len(parsed)} signals")
+            return JSONResponse(
+                status_code=200,
+                content={"accepted": len(parsed), "incidents": len(created)},
+            )
 
         return _handler
