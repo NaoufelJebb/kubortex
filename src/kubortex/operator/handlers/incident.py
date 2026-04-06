@@ -137,7 +137,12 @@ async def on_incident_failed(
     except ApiException as exc:
         if exc.status == 404:
             logger.warning("autonomy_profile_gone_on_retry", name=name, profile=profile_name)
-            await _transition(name, namespace, IncidentPhase.ESCALATED, "AutonomyProfile not found on retry")
+            await _transition(
+                name,
+                namespace,
+                IncidentPhase.ESCALATED,
+                "AutonomyProfile not found on retry",
+            )
             return
         raise
 
@@ -157,10 +162,15 @@ async def on_incident_failed(
             prev_inv = await get_resource(INVESTIGATIONS, prev_inv_name)
             prev_result = (prev_inv.get("status") or {}).get("result", {})
             if isinstance(prev_result, dict) and prev_result:
-                prior_attempts = [{
-                    "hypothesis": prev_result.get("hypothesis", ""),
-                    "failureReason": prev_result.get("escalationReason", "Action failed or rolled back"),
-                }]
+                prior_attempts = [
+                    {
+                        "hypothesis": prev_result.get("hypothesis", ""),
+                        "failureReason": prev_result.get(
+                            "escalationReason",
+                            "Action failed or rolled back",
+                        ),
+                    }
+                ]
         except ApiException:
             pass
 
@@ -190,7 +200,12 @@ async def on_incident_failed(
             "escalationDeadline": deadline.isoformat(),
         },
     )
-    logger.info("incident_retry_investigating", name=name, investigation=inv_name, attempt=retry_count)
+    logger.info(
+        "incident_retry_investigating",
+        name=name,
+        investigation=inv_name,
+        attempt=retry_count,
+    )
 
 
 @kopf.timer(GROUP, VERSION, INCIDENTS, interval=settings.escalation_check_interval)
@@ -266,9 +281,8 @@ def _scope_matches(
     ns_sel = scope.namespaces
     target_ns = spec.target_ref.namespace if spec.target_ref else None
 
-    if ns_sel.match_names:
-        if target_ns is None or target_ns not in ns_sel.match_names:
-            return False
+    if ns_sel.match_names and (target_ns is None or target_ns not in ns_sel.match_names):
+        return False
 
     if ns_sel.match_labels:
         # Cannot satisfy a label selector with no namespace
@@ -368,7 +382,7 @@ async def _transition(name: str, namespace: str, phase: IncidentPhase, detail: s
     await patch_status(
         INCIDENTS,
         name,
-        {"phase": phase, "timeline": existing_timeline + [new_entry]},
+        {"phase": phase, "timeline": [*existing_timeline, new_entry]},
     )
     logger.info("incident_transitioned", name=name, phase=phase, detail=detail)
 
@@ -401,10 +415,6 @@ def _build_investigation(
         "metadata": {
             "name": inv_name,
             "namespace": namespace,
-            "labels": {
-                "kubortex.io/incident": incident_name,
-                "kubortex.io/category": spec.categories[0] if spec.categories else "",
-            },
             "ownerReferences": [
                 {
                     "apiVersion": f"{GROUP}/{VERSION}",

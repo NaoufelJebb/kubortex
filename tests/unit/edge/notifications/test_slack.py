@@ -100,7 +100,7 @@ class TestRender:
             IncidentDetected,
             summary="CPU high",
             severity="critical",
-            category="resource-saturation",
+            categories=["resource-saturation", "latency"],
         )
         text = n._render(event)
         assert text.startswith(":rotating_light:")
@@ -116,13 +116,13 @@ class TestRender:
         assert "inc-001" in text
 
     def test_missing_format_placeholder_does_not_raise(self, n: SlackNotifier) -> None:
-        # IncidentDetected template expects summary/severity/category.
+        # IncidentDetected template expects summary/severity/categories.
         # With an empty payload, Slack should fall back to the incident name and
         # generic labels instead of rendering placeholders.
         event = _make_event(IncidentDetected)
         text = n._render(event)
         assert text == (
-            ":rotating_light: Incident detected: *inc-001*\nSeverity: unknown | Category: unknown"
+            ":rotating_light: Incident detected: *inc-001*\nSeverity: unknown | Categories: unknown"
         )
 
     def test_incident_resolved_uses_incident_name(self, n: SlackNotifier) -> None:
@@ -154,6 +154,13 @@ class TestRender:
         context = n._build_render_context(_make_event(IncidentDetected))
         assert context["summary"] == "inc-001"
         assert context["severity"] == "unknown"
+        assert context["categoriesText"] == "unknown"
+
+    def test_render_context_formats_all_categories(self, n: SlackNotifier) -> None:
+        context = n._build_render_context(
+            _make_event(IncidentDetected, categories=["resource-saturation", "latency"])
+        )
+        assert context["categoriesText"] == "resource-saturation, latency"
 
     def test_malformed_template_falls_back_to_generic_message(
         self, n: SlackNotifier, monkeypatch: pytest.MonkeyPatch

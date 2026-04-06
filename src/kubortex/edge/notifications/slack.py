@@ -21,7 +21,7 @@ logger = structlog.get_logger(__name__)
 _TEMPLATES: dict[str, tuple[str, str]] = {
     "IncidentDetected": (
         ":rotating_light:",
-        "Incident detected: *{summary}*\nSeverity: {severity} | Category: {category}",
+        "Incident detected: *{summary}*\nSeverity: {severity} | Categories: {categoriesText}",
     ),
     "InvestigationStarted": (":mag:", "Investigation started for *{summary}*"),
     "InvestigationCompleted": (
@@ -138,12 +138,16 @@ class SlackNotifier:
     def _build_render_context(self, event: DomainEvent) -> dict[str, Any]:
         """Build a rendering context with conservative fallbacks."""
         payload = dict(event.payload)
+        categories = payload.get("categories")
+        if not isinstance(categories, list):
+            categories = []
+        categories_text = ", ".join(item for item in categories if isinstance(item, str) and item)
         return {
             "incidentName": event.incident_name,
             "namespace": event.namespace,
             "summary": payload.get("summary") or event.incident_name,
             "severity": payload.get("severity") or "unknown",
-            "category": payload.get("category") or "unknown",
+            "categoriesText": categories_text or "unknown",
             **payload,
         }
 

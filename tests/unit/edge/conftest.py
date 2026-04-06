@@ -80,21 +80,12 @@ def make_incident_obj(
     if target_ref is not None:
         spec["targetRef"] = target_ref.model_dump()
 
-    labels: dict[str, Any] = {
-        "kubortex.io/category": category,
-        "kubortex.io/severity": Severity.WARNING,
-        "kubortex.io/target-kind": target_ref.kind if target_ref else "",
-        "kubortex.io/target-ns": target_ref.namespace if target_ref else "",
-        "kubortex.io/target-name": target_ref.name if target_ref else "",
-    }
-
     return {
         "metadata": {
             "name": name,
             "namespace": namespace,
             "uid": uid,
             "creationTimestamp": creation_timestamp,
-            "labels": labels,
         },
         "spec": spec,
         "status": {"phase": phase},

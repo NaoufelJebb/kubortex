@@ -32,9 +32,12 @@ spec:
                 summary:
                   type: string
                   description: Incident summary passed to the investigation.
-                category:
-                  type: string
-                  description: Incident category under investigation.
+                categories:
+                  type: array
+                  description: Incident categories represented in the investigation context.
+                  items:
+                    type: string
+                    description: Incident category under investigation.
                 severity:
                   type: string
                   description: Incident severity under investigation.
@@ -72,16 +75,10 @@ spec:
                 maxIterations:
                   type: integer
                   description: Maximum reasoning iterations allowed.
-                deadlineSeconds:
+                timeoutSeconds:
                   type: integer
                   description: Time budget for the investigation.
-                labels:
-                  type: object
-                  description: Labels copied onto the investigation resource.
-                  additionalProperties:
-                    type: string
-                    description: Label value.
-              required: [incidentRef, summary, category, severity]
+              required: [incidentRef, summary, categories, severity]
             status:
               type: object
               description: Observed investigation progress and results.

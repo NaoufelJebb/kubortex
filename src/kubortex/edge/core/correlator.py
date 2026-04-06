@@ -300,13 +300,6 @@ async def correlate_and_upsert(
         "metadata": {
             "name": inc_name,
             "namespace": namespace,
-            "labels": {
-                "kubortex.io/severity": severity,
-                "kubortex.io/category": categories[0] if categories else "",
-                "kubortex.io/target-kind": target.kind if target else "",
-                "kubortex.io/target-ns": target.namespace if target else "",
-                "kubortex.io/target-name": target.name if target else "",
-            },
         },
         "spec": {
             "severity": severity,
@@ -317,6 +310,12 @@ async def correlate_and_upsert(
             "targetRef": target.model_dump() if target else None,
         },
     }
+    if target is not None:
+        body["metadata"]["labels"] = {
+            "kubortex.io/target-kind": target.kind,
+            "kubortex.io/target-ns": target.namespace,
+            "kubortex.io/target-name": target.name,
+        }
     try:
         await create_resource(INCIDENTS, body)
         logger.info(
@@ -338,7 +337,7 @@ async def correlate_and_upsert(
         if exc.status == 404:
             raise RuntimeError(
                 "canonical incident create conflicted but the resource could not be read"
-            )
+            ) from exc
         # A non-404 read failure after a create conflict means the canonical
         # incident exists in an unknown state, so do not continue correlation.
         raise

@@ -389,7 +389,9 @@ class TestCorrelateAndUpsert:
         mock_k8s["patch_spec"].assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_create_conflict_fails_when_canonical_incident_is_not_reusable(self, mock_k8s) -> None:
+    async def test_create_conflict_fails_when_canonical_incident_is_not_reusable(
+        self, mock_k8s
+    ) -> None:
         signals = [make_signal(alertname="NewAlert")]
         mock_k8s["create_resource"].side_effect = ApiException(status=409)
         conflicting = make_incident_obj(
@@ -449,6 +451,11 @@ class TestCorrelateAndUpsert:
         assert body["spec"]["categories"] == [Category.RESOURCE_SATURATION.value]
         assert body["spec"]["summary"] == "Disk full"
         assert body["spec"]["targetRef"] is not None
+        assert body["metadata"]["labels"] == {
+            "kubortex.io/target-kind": "Deployment",
+            "kubortex.io/target-ns": "default",
+            "kubortex.io/target-name": "my-app",
+        }
 
     @pytest.mark.asyncio
     async def test_incident_without_target_has_null_target_ref(self, mock_k8s) -> None:
@@ -456,6 +463,7 @@ class TestCorrelateAndUpsert:
         await correlate_and_upsert(signals, [Category.CUSTOM], None, "kubortex-system")
         body = mock_k8s["create_resource"].await_args[0][1]
         assert body["spec"]["targetRef"] is None
+        assert "labels" not in body["metadata"]
 
     @pytest.mark.asyncio
     async def test_empty_signals_list_still_creates_incident(self, mock_k8s) -> None:
@@ -506,7 +514,11 @@ class TestCorrelateAndUpsert:
             inc,
             {
                 "metadata": {"resourceVersion": "1"},
-                "spec": {"signals": [existing_raw], "severity": "warning", "categories": ["custom"]},
+                "spec": {
+                    "signals": [existing_raw],
+                    "severity": "warning",
+                    "categories": ["custom"],
+                },
                 "status": {},
             },
         ]
@@ -520,7 +532,11 @@ class TestCorrelateAndUpsert:
     async def test_signal_cap_drops_oldest(self, mock_k8s) -> None:
         """When the merged signal list exceeds max_signals, oldest entries are dropped."""
         old_signals = [
-            {"alertname": f"Old{i}", "observedAt": f"2024-01-0{i+1}T00:00:00+00:00", "severity": "info"}
+            {
+                "alertname": f"Old{i}",
+                "observedAt": f"2024-01-0{i+1}T00:00:00+00:00",
+                "severity": "info",
+            }
             for i in range(5)
         ]
         inc = make_incident_obj(name="inc-cap", category=Category.CUSTOM)

@@ -95,7 +95,6 @@ class InvestigatorWorker:
         name = inv["metadata"]["name"]
         spec = inv.get("spec", {})
 
-        # incidentRef is a plain string in InvestigationSpec
         incident_name = spec.get("incidentRef", "unknown")
 
         logger.info("investigation_started", name=name, incident=incident_name)
@@ -103,7 +102,10 @@ class InvestigatorWorker:
         try:
             await patch_status("investigations", name, {"phase": "InProgress"})
 
-            category = spec.get("category", "")
+            categories = spec.get("categories") or []
+            if not isinstance(categories, list):
+                categories = []
+            category = next((item for item in categories if isinstance(item, str) and item), "")
             severity = spec.get("severity", "")
             target = spec.get("targetRef", {})
 
@@ -185,7 +187,10 @@ class InvestigatorWorker:
             # Record feedback for the learning system
             try:
                 inv_result = InvestigationResult.model_validate(result)
-                resolved = not result.get("escalate", True) and result.get("confidence", 0.0) >= 0.60
+                resolved = (
+                    not result.get("escalate", True)
+                    and result.get("confidence", 0.0) >= 0.60
+                )
                 record_feedback(
                     ranker=self._ranker,
                     result=inv_result,
@@ -203,7 +208,7 @@ class InvestigatorWorker:
                 escalate=result.get("escalate"),
             )
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("investigation_timed_out", name=name)
             await patch_status(
                 "investigations",

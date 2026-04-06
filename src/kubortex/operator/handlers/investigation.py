@@ -71,7 +71,8 @@ async def on_investigation_result(
     new: Any | None,
     **_: Any,
 ) -> None:
-    """Transition Investigation → Completed, advance the parent Incident, and create a RemediationPlan.
+    """Transition Investigation → Completed, advance the parent Incident,
+    and create a RemediationPlan.
 
     Triggered when the investigator worker writes ``status.result``. The
     handler:
@@ -179,6 +180,10 @@ async def on_investigation_result(
 
     except ApiException as exc:
         if exc.status == 404:
-            logger.warning("incident_gone_on_investigation_result", name=name, incident=incident_ref)
+            logger.warning(
+                "incident_gone_on_investigation_result",
+                name=name,
+                incident=incident_ref,
+            )
         else:
             raise

@@ -20,7 +20,7 @@ class CommonPayload(TypedDict, total=False):
 class IncidentPayload(CommonPayload, total=False):
     summary: str
     severity: str
-    category: str
+    categories: list[str]
     targetKind: str
     targetNamespace: str
     targetName: str

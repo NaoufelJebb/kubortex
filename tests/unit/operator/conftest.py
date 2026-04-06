@@ -11,7 +11,6 @@ from kubortex.operator.policy import ActionContext
 from kubortex.shared.models.autonomy import BudgetUsage
 from kubortex.shared.types import Severity
 
-
 # ---------------------------------------------------------------------------
 # Domain object factories
 # ---------------------------------------------------------------------------
@@ -102,7 +101,7 @@ def make_incident_body(
         status["escalationDeadline"] = deadline
     spec: dict = {
         "severity": severity,
-        "category": category,
+        "categories": [category],
         "summary": "Test incident",
         "source": "alertmanager",
         "signals": [],
@@ -131,7 +130,12 @@ def make_investigation_body(
         status["result"] = result
     return {
         "metadata": {"name": name, "namespace": "kubortex-system"},
-        "spec": {"incidentRef": incident_ref},
+        "spec": {
+            "incidentRef": incident_ref,
+            "categories": ["error-rate"],
+            "severity": "high",
+            "summary": "Test investigation",
+        },
         "status": status,
     }
 
@@ -266,8 +270,20 @@ def mock_k8s(monkeypatch) -> dict:
         "update_usage": AsyncMock(return_value=default_usage),
     }
 
-    k8s_fns = ["create_resource", "get_resource", "list_resources", "patch_status", "patch_spec"]
-    budget_fns = ["load_usage", "persist_usage", "increment_usage", "decrement_active", "update_usage"]
+    k8s_fns = [
+        "create_resource",
+        "get_resource",
+        "list_resources",
+        "patch_status",
+        "patch_spec",
+    ]
+    budget_fns = [
+        "load_usage",
+        "persist_usage",
+        "increment_usage",
+        "decrement_active",
+        "update_usage",
+    ]
 
     for handler in [
         "incident",

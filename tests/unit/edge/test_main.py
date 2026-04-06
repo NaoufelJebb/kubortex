@@ -53,6 +53,11 @@ class TestSignalIngestion:
         paths = {r.path for r in app.routes}
         assert "/readyz" in paths
 
+    def test_metrics_registered(self, monkeypatch) -> None:
+        app, _ = _make_app(_settings(), monkeypatch)
+        paths = {r.path for r in app.routes}
+        assert "/metrics" in paths
+
 
 # ---------------------------------------------------------------------------
 # create_app — notification router wiring
@@ -103,6 +108,15 @@ class TestLifespan:
 
         assert response.status_code == 503
         assert response.json() == {"status": "not_ready"}
+
+    def test_metrics_returns_prometheus_payload(self, monkeypatch) -> None:
+        app, _ = _make_app(_settings(), monkeypatch)
+
+        with TestClient(app) as client:
+            response = client.get("/metrics")
+
+        assert response.status_code == 200
+        assert "text/plain" in response.headers["content-type"]
 
 
 # ---------------------------------------------------------------------------

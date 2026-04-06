@@ -128,7 +128,11 @@ class TestOnInvestigationResult:
             "confidence": 0.85,
             "evidence": [],
             "recommendedActions": [
-                {"type": "restart-pod", "target": {"kind": "Pod", "namespace": "default", "name": "p"}, "parameters": {}}
+                {
+                    "type": "restart-pod",
+                    "target": {"kind": "Pod", "namespace": "default", "name": "p"},
+                    "parameters": {},
+                }
             ],
         }
         body = make_investigation_body(phase="InProgress", incident_ref="inc-1")

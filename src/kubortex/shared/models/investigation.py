@@ -112,7 +112,7 @@ class PriorAttempt(BaseModel):
 
 class InvestigationSpec(BaseModel):
     incident_ref: str = Field(alias="incidentRef")
-    category: Category
+    categories: list[Category] = Field(default_factory=list)
     severity: Severity
     summary: str
     target_ref: TargetRef | None = Field(None, alias="targetRef")

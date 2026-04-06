@@ -74,7 +74,7 @@ async def list_resources(
     Args:
         plural: CRD plural name, for example ``investigations``.
         label_selector: Optional Kubernetes label-selector string (e.g.
-            ``"kubortex.io/target-kind=Deployment,kubortex.io/target-ns=default"``).
+            ``"app.kubernetes.io/name=payments-api,environment=prod"``).
             When provided the API server filters the results server-side,
             avoiding the need to fetch and filter all resources in-process.
 

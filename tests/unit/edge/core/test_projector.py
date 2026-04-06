@@ -135,7 +135,7 @@ class TestProject:
         assert event is not None
         assert event.payload["summary"] == "CPU high"
         assert event.payload["severity"] == "critical"
-        assert event.payload["category"] == "resource-saturation"
+        assert event.payload["categories"] == ["resource-saturation"]
         assert event.payload["targetName"] == "api"
 
     def test_investigation_payload_uses_string_incident_ref(
@@ -145,12 +145,11 @@ class TestProject:
             uid="uid-1",
             name="inv-001",
             phase="Completed",
-            incident_name_in_spec="inc-001",
             spec={
                 "incidentRef": "inc-001",
                 "summary": "CPU high",
                 "severity": "critical",
-                "category": "resource-saturation",
+                "categories": ["resource-saturation", "latency"],
             },
             status={
                 "phase": "Completed",
@@ -165,6 +164,7 @@ class TestProject:
         event = projector._project("investigations", obj)
         assert isinstance(event, InvestigationCompleted)
         assert event.incident_name == "inc-001"
+        assert event.payload["categories"] == ["resource-saturation", "latency"]
         assert event.payload["confidence"] == 0.91
         assert event.payload["hypothesis"] == "CPU throttling"
         assert event.payload["proposedActionCount"] == 1
@@ -230,7 +230,7 @@ class TestResolveIncidentName:
 
     def test_child_resource_uses_spec_incident_ref(self, projector: EventProjector) -> None:
         obj = _make_obj(incident_name_in_spec="parent-incident")
-        assert projector._resolve_incident_name("investigations", obj) == "parent-incident"
+        assert projector._resolve_incident_name("approvalrequests", obj) == "parent-incident"
 
     def test_child_resource_falls_back_to_owner_ref(self, projector: EventProjector) -> None:
         obj = _make_obj(owner_incident="owner-incident")

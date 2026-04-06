@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-
 from kubortex.operator.handlers.incident import (
     _build_investigation,
     _match_autonomy_profile,
@@ -22,7 +21,6 @@ from kubortex.shared.models.autonomy import AutonomyScope
 from kubortex.shared.types import IncidentPhase
 
 from ..conftest import make_autonomy_profile_resource, make_incident_body
-
 
 # ---------------------------------------------------------------------------
 # _build_investigation (pure helper)
@@ -52,12 +50,10 @@ class TestBuildInvestigation:
         assert owner["kind"] == "Incident"
         assert owner["controller"] is True
 
-    def test_labels_include_incident_and_category(self) -> None:
+    def test_investigation_metadata_has_no_stale_labels(self) -> None:
         spec = self._spec()
         body = _build_investigation("inv-1", "inc-1", "ns", spec, uid="test-uid")
-        labels = body["metadata"]["labels"]
-        assert labels["kubortex.io/incident"] == "inc-1"
-        assert labels["kubortex.io/category"] == spec.categories[0]
+        assert "labels" not in body["metadata"]
 
     def test_spec_fields_from_incident(self) -> None:
         spec = self._spec()
@@ -169,7 +165,14 @@ class TestScopeMatches:
 
     def test_match_labels_subset_of_ns_labels_matches(self) -> None:
         scope = self._scope(namespaces={"matchLabels": {"team": "sre"}})
-        assert _scope_matches(scope, self._spec(target_ns="ns"), {"team": "sre", "env": "prod"}) is True
+        assert (
+            _scope_matches(
+                scope,
+                self._spec(target_ns="ns"),
+                {"team": "sre", "env": "prod"},
+            )
+            is True
+        )
 
     def test_match_labels_not_subset_rejects(self) -> None:
         scope = self._scope(namespaces={"matchLabels": {"team": "sre"}})
@@ -200,7 +203,14 @@ class TestScopeMatches:
             severities=["high"],
             categories=["latency"],  # incident is error-rate
         )
-        assert _scope_matches(scope, self._spec(severity="high", category="error-rate"), None) is False
+        assert (
+            _scope_matches(
+                scope,
+                self._spec(severity="high", category="error-rate"),
+                None,
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +258,7 @@ class TestMatchAutonomyProfile:
         category: str = "error-rate",
         target_ns: str | None = None,
     ) -> IncidentSpec:
-        data: dict[str, Any] = {"severity": severity, "category": category, "summary": "test"}
+        data: dict[str, Any] = {"severity": severity, "categories": [category], "summary": "test"}
         if target_ns is not None:
             data["targetRef"] = {"kind": "Deployment", "namespace": target_ns, "name": "app"}
         return IncidentSpec.model_validate(data)

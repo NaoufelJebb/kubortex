@@ -346,17 +346,15 @@ class EventProjector:
             "phase": phase,
         }
 
-        if plural in {INCIDENTS, INVESTIGATIONS}:
+        if plural == INCIDENTS:
             payload.update(
                 {
                     "summary": spec.get("summary", ""),
                     "severity": spec.get("severity", ""),
-                    "category": (spec.get("categories") or [""])[0],
+                    "categories": [c for c in spec.get("categories", []) if isinstance(c, str)],
                 }
             )
             self._add_target_fields(payload, spec.get("targetRef"))
-
-        if plural == INCIDENTS:
             investigation = status.get("investigation") or {}
             if isinstance(investigation, dict):
                 payload.update(
@@ -370,6 +368,14 @@ class EventProjector:
             return payload
 
         if plural == INVESTIGATIONS:
+            payload.update(
+                {
+                    "summary": spec.get("summary", ""),
+                    "severity": spec.get("severity", ""),
+                    "categories": [c for c in spec.get("categories", []) if isinstance(c, str)],
+                }
+            )
+            self._add_target_fields(payload, spec.get("targetRef"))
             result = status.get("result") or {}
             if isinstance(result, dict):
                 payload.update(

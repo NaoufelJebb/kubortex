@@ -9,9 +9,10 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse
 from kubernetes_asyncio import config as k8s_config
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from kubortex.edge.core.ingester import SignalIngester
 from kubortex.edge.core.router import NotificationRouter
@@ -37,6 +38,12 @@ def create_app(settings: EdgeSettings | None = None) -> FastAPI:
     Returns:
         Configured FastAPI application.
     """
+    # AIDEV-NOTE: importing the shared metrics module here registers all
+    # Prometheus collectors on the default registry before the /metrics route
+    # is exposed. Edge currently emits only default runtime metrics, but this
+    # keeps the registry consistent across components without extra wrappers.
+    import kubortex.shared.metrics  # noqa: F401
+
     s = settings or EdgeSettings()
 
     ingester = SignalIngester(s)
@@ -67,6 +74,10 @@ def create_app(settings: EdgeSettings | None = None) -> FastAPI:
         if not notification_router.is_ready:
             return JSONResponse(status_code=503, content={"status": "not_ready"})
         return {"status": "ok"}
+
+    @_app.get("/metrics", response_model=None)
+    async def metrics() -> Response:
+        return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     return _app
 
