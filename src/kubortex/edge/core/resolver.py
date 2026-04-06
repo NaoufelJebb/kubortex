@@ -7,9 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
-from kubernetes_asyncio import client as k8s_client
 from kubernetes_asyncio.client import ApiException
 
+from kubortex.shared.kube_clients import get_kubernetes_clients
 from kubortex.shared.models.incident import TargetRef
 
 logger = structlog.get_logger(__name__)
@@ -61,7 +61,7 @@ def _infer_workload_from_pod_name(pod_name: str) -> tuple[str, str] | None:
 
 
 async def _read_pod_resource(namespace: str, name: str) -> dict[str, Any] | None:
-    """Fetch a Pod for enrichment.
+    """Fetch a Pod for enrichment using the shared Kubernetes clients.
 
     Args:
         namespace: Pod namespace.
@@ -71,9 +71,8 @@ async def _read_pod_resource(namespace: str, name: str) -> dict[str, Any] | None
         Pod resource object, or ``None`` on 404 or read failure.
     """
     try:
-        async with k8s_client.ApiClient() as api_client:
-            api = k8s_client.CoreV1Api(api_client)
-            return await api.read_namespaced_pod(name=name, namespace=namespace)
+        clients = await get_kubernetes_clients()
+        return await clients.core_v1.read_namespaced_pod(name=name, namespace=namespace)
     except ApiException as exc:
         if exc.status != 404:
             logger.warning("target_resolver_pod_lookup_failed", namespace=namespace, pod=name)
@@ -84,7 +83,7 @@ async def _read_pod_resource(namespace: str, name: str) -> dict[str, Any] | None
 
 
 async def _read_replicaset_resource(namespace: str, name: str) -> dict[str, Any] | None:
-    """Fetch a ReplicaSet for enrichment.
+    """Fetch a ReplicaSet for enrichment using the shared Kubernetes clients.
 
     Args:
         namespace: ReplicaSet namespace.
@@ -94,9 +93,8 @@ async def _read_replicaset_resource(namespace: str, name: str) -> dict[str, Any]
         ReplicaSet resource object, or ``None`` on 404 or read failure.
     """
     try:
-        async with k8s_client.ApiClient() as api_client:
-            api = k8s_client.AppsV1Api(api_client)
-            return await api.read_namespaced_replica_set(name=name, namespace=namespace)
+        clients = await get_kubernetes_clients()
+        return await clients.apps_v1.read_namespaced_replica_set(name=name, namespace=namespace)
     except ApiException as exc:
         if exc.status != 404:
             logger.warning(
@@ -166,7 +164,11 @@ async def _resolve_pod_owner(hints: TargetHints) -> TargetRef | None:
         rs_refs = list(getattr(rs_meta, "owner_references", None) or [])
         for rs_ref in rs_refs:
             if rs_ref.kind == "Deployment" and rs_ref.name:
-                return TargetRef(kind="Deployment", namespace=hints.namespace, name=rs_ref.name)
+                return TargetRef(
+                    kind="Deployment",
+                    namespace=hints.namespace,
+                    name=rs_ref.name,
+                )
 
     return TargetRef(kind="Pod", namespace=hints.namespace, name=hints.pod)
 

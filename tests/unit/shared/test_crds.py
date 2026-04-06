@@ -39,7 +39,9 @@ class TestPatchSpec:
             crd_version="v1alpha1",
             namespace="kubortex-system",
         ))
-        monkeypatch.setattr(crds, "_api", lambda: api)
+        async def _api():
+            return api
+        monkeypatch.setattr(crds, "_api", _api)
 
         await crds.patch_spec("incidents", "inc-1", {"signals": []})
 
@@ -59,7 +61,9 @@ class TestPatchSpec:
             crd_version="v1alpha1",
             namespace="kubortex-system",
         ))
-        monkeypatch.setattr(crds, "_api", lambda: api)
+        async def _api():
+            return api
+        monkeypatch.setattr(crds, "_api", _api)
 
         await crds.patch_spec(
             "incidents",
@@ -89,7 +93,9 @@ class TestPatchStatus:
             crd_version="v1alpha1",
             namespace="kubortex-system",
         ))
-        monkeypatch.setattr(crds, "_api", lambda: api)
+        async def _api():
+            return api
+        monkeypatch.setattr(crds, "_api", _api)
 
         await crds.patch_status("incidents", "inc-1", {"phase": "Detected"})
 
@@ -109,7 +115,9 @@ class TestPatchStatus:
             crd_version="v1alpha1",
             namespace="kubortex-system",
         ))
-        monkeypatch.setattr(crds, "_api", lambda: api)
+        async def _api():
+            return api
+        monkeypatch.setattr(crds, "_api", _api)
 
         await crds.patch_status(
             "incidents",

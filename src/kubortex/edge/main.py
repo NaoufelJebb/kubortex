@@ -19,6 +19,7 @@ from kubortex.edge.core.router import NotificationRouter
 from kubortex.edge.notifications.slack import SlackNotifier
 from kubortex.edge.signals.alertmanager import AlertmanagerSource
 from kubortex.shared.config import EdgeSettings
+from kubortex.shared.kube_clients import close_kubernetes_clients
 from kubortex.shared.logging import configure_logging
 
 
@@ -61,6 +62,7 @@ def create_app(settings: EdgeSettings | None = None) -> FastAPI:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
+        await close_kubernetes_clients()
 
     _app = FastAPI(title="kubortex-edge", version=_app_version(), lifespan=lifespan)
     _app.include_router(ingester.router)

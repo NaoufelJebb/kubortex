@@ -172,6 +172,27 @@ class TestProject:
     def test_invalid_object_shape_is_skipped(self, projector: EventProjector) -> None:
         assert projector._project("incidents", {"metadata": [], "status": {}}) is None
 
+    def test_incident_added_without_status_maps_to_detected(
+        self,
+        projector: EventProjector,
+    ) -> None:
+        obj = {
+            "metadata": {
+                "uid": "uid-1",
+                "name": "inc-001",
+                "namespace": "default",
+                "resourceVersion": "1",
+            },
+            "spec": {
+                "summary": "CPU high",
+                "severity": "critical",
+                "categories": ["resource-saturation"],
+            },
+        }
+        event = projector._project("incidents", obj, event_type="ADDED")
+        assert isinstance(event, IncidentDetected)
+        assert event.payload["phase"] == "Detected"
+
 
 # ---------------------------------------------------------------------------
 # _map_event — full mapping table
@@ -359,13 +380,11 @@ class TestWatchEvents:
                     payload={"phase": "Detected"},
                 )
                 return
-
-            await asyncio.Future()
-            yield  # pragma: no cover
+            return
 
         monkeypatch.setattr(
-            "kubortex.edge.core.projector.k8s_client.CustomObjectsApi",
-            lambda: object(),
+            "kubortex.edge.core.projector.get_kubernetes_clients",
+            AsyncMock(return_value=SimpleNamespace(custom_objects=object())),
         )
         monkeypatch.setattr(projector, "_initialize_resource_watch_state", fake_prime)
         monkeypatch.setattr(projector, "_watch_resource", fake_watch_resource)

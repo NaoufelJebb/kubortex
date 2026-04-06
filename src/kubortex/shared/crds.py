@@ -15,6 +15,7 @@ from kubernetes_asyncio import client as k8s_client
 from kubernetes_asyncio.client import ApiException
 
 from kubortex.shared.config import SharedSettings
+from kubortex.shared.kube_clients import get_kubernetes_clients
 
 logger = structlog.get_logger(__name__)
 
@@ -31,8 +32,9 @@ def _settings() -> SharedSettings:
     return _SETTINGS
 
 
-def _api() -> k8s_client.CustomObjectsApi:
-    return k8s_client.CustomObjectsApi()
+async def _api() -> k8s_client.CustomObjectsApi:
+    clients = await get_kubernetes_clients()
+    return clients.custom_objects
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +57,8 @@ async def get_resource(plural: str, name: str) -> dict[str, Any]:
         Full Kubernetes custom resource object.
     """
     s = _settings()
-    return await _api().get_namespaced_custom_object(
+    api = await _api()
+    return await api.get_namespaced_custom_object(
         group=s.crd_group, version=s.crd_version, namespace=s.namespace,
         plural=plural, name=name,
     )
@@ -90,7 +93,8 @@ async def list_resources(
     }
     if label_selector:
         kwargs["label_selector"] = label_selector
-    result = await _api().list_namespaced_custom_object(**kwargs)
+    api = await _api()
+    result = await api.list_namespaced_custom_object(**kwargs)
     return result.get("items", [])
 
 
@@ -108,7 +112,8 @@ async def create_resource(plural: str, body: dict[str, Any]) -> dict[str, Any]:
         Kubernetes API response for the created resource.
     """
     s = _settings()
-    return await _api().create_namespaced_custom_object(
+    api = await _api()
+    return await api.create_namespaced_custom_object(
         group=s.crd_group, version=s.crd_version, namespace=s.namespace,
         plural=plural, body=body,
     )
@@ -141,7 +146,8 @@ async def patch_status(
     body: dict[str, Any] = {"status": status_patch}
     if resource_version:
         body["metadata"] = {"resourceVersion": resource_version}
-    return await _api().patch_namespaced_custom_object_status(
+    api = await _api()
+    return await api.patch_namespaced_custom_object_status(
         group=s.crd_group,
         version=s.crd_version,
         namespace=s.namespace,
@@ -179,7 +185,8 @@ async def patch_spec(
     body: dict[str, Any] = {"spec": spec_patch}
     if resource_version:
         body["metadata"] = {"resourceVersion": resource_version}
-    return await _api().patch_namespaced_custom_object(
+    api = await _api()
+    return await api.patch_namespaced_custom_object(
         group=s.crd_group,
         version=s.crd_version,
         namespace=s.namespace,
@@ -250,7 +257,8 @@ async def try_claim(plural: str, name: str, pod_name: str) -> bool:
     }
 
     try:
-        await _api().patch_namespaced_custom_object_status(
+        api = await _api()
+        await api.patch_namespaced_custom_object_status(
             group=s.crd_group,
             version=s.crd_version,
             namespace=s.namespace,

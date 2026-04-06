@@ -38,6 +38,7 @@ from kubortex.shared.constants import (
     INCIDENTS,
     INVESTIGATIONS,
 )
+from kubortex.shared.kube_clients import get_kubernetes_clients
 
 logger = structlog.get_logger(__name__)
 _EVENT_QUEUE_MAXSIZE = 256
@@ -66,7 +67,8 @@ class EventProjector:
         Returns:
             Async iterator of projected notification events.
         """
-        api = k8s_client.CustomObjectsApi()
+        clients = await get_kubernetes_clients()
+        api = clients.custom_objects
         s = self._settings
 
         watched_resources = [
@@ -100,6 +102,7 @@ class EventProjector:
             self._ready.clear()
             for t in feed_tasks:
                 t.cancel()
+            await asyncio.gather(*feed_tasks, return_exceptions=True)
 
     async def _watch_resource(
         self,
@@ -121,32 +124,39 @@ class EventProjector:
         current_resource_version = resource_version
         while True:
             try:
-                async for event in watch.Watch().stream(
-                    api.list_namespaced_custom_object,
-                    group=settings.crd_group,
-                    version=settings.crd_version,
-                    namespace=settings.namespace,
-                    plural=plural,
-                    resource_version=current_resource_version,
-                ):
-                    obj = event.get("object", {})
-                    event_type = event.get("type", "")
-                    current_resource_version = (
-                        obj.get("metadata", {}).get("resourceVersion") or current_resource_version
-                    )
+                watcher = watch.Watch()
+                try:
+                    async for event in watcher.stream(
+                        api.list_namespaced_custom_object,
+                        group=settings.crd_group,
+                        version=settings.crd_version,
+                        namespace=settings.namespace,
+                        plural=plural,
+                        resource_version=current_resource_version,
+                    ):
+                        obj = event.get("object", {})
+                        event_type = event.get("type", "")
+                        if isinstance(obj, dict):
+                            metadata = obj.get("metadata", {})
+                            if isinstance(metadata, dict):
+                                current_resource_version = (
+                                    metadata.get("resourceVersion") or current_resource_version
+                                )
 
-                    if event_type == "DELETED":
-                        uid = obj.get("metadata", {}).get("uid", "")
-                        if uid:
-                            self._seen_phases.pop(uid, None)
-                        continue
+                        if event_type == "DELETED":
+                            uid = obj.get("metadata", {}).get("uid", "")
+                            if uid:
+                                self._seen_phases.pop(uid, None)
+                            continue
 
-                    if event_type not in ("ADDED", "MODIFIED"):
-                        continue
+                        if event_type not in ("ADDED", "MODIFIED"):
+                            continue
 
-                    domain_event = self._project(plural, obj)
-                    if domain_event:
-                        yield domain_event
+                        domain_event = self._project(plural, obj, event_type=event_type)
+                        if domain_event:
+                            yield domain_event
+                finally:
+                    watcher.stop()
 
             except asyncio.CancelledError:
                 raise
@@ -159,7 +169,13 @@ class EventProjector:
                 plural,
             )
 
-    def _project(self, plural: str, obj: dict[str, Any]) -> DomainEvent | None:
+    def _project(
+        self,
+        plural: str,
+        obj: dict[str, Any],
+        *,
+        event_type: str | None = None,
+    ) -> DomainEvent | None:
         """Project a CRD object to a notification event when its phase changes.
 
         Args:
@@ -174,14 +190,25 @@ class EventProjector:
             return None
 
         metadata = obj.get("metadata")
+        if not isinstance(metadata, dict):
+            logger.warning("event_projection_skipped", plural=plural, reason="invalid_object_shape")
+            return None
+
         status = obj.get("status")
-        if not isinstance(metadata, dict) or not isinstance(status, dict):
+        if isinstance(status, dict):
+            phase = status.get("phase", "")
+        elif plural == INCIDENTS and event_type == "ADDED":
+            phase = "Detected"
+            status = {}
+        else:
             logger.warning("event_projection_skipped", plural=plural, reason="invalid_object_shape")
             return None
 
         uid = metadata.get("uid", "")
-        phase = status.get("phase", "")
         prev_phase = self._seen_phases.get(uid)
+
+        if not phase:
+            return None
 
         if phase == prev_phase:
             return None
