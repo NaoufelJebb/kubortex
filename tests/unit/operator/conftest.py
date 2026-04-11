@@ -182,7 +182,7 @@ def make_approval_request_body(
     investigation_ref: str = "inv-inc-test",
     phase: str = "Pending",
     decision: str | None = None,
-    timeout_minutes: int = 30,
+    timeout_seconds: int = 1800,
     creation_timestamp: str | None = None,
 ) -> dict:
     """Build a minimal ApprovalRequest CRD dict."""
@@ -208,7 +208,7 @@ def make_approval_request_body(
                 "rationale": "test",
                 "riskTier": "low",
             },
-            "timeoutMinutes": timeout_minutes,
+            "timeoutSeconds": timeout_seconds,
         },
         "status": status,
     }

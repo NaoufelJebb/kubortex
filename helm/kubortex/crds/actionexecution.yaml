@@ -60,6 +60,9 @@ spec:
                     rationale:
                       type: string
                       description: Reason this action was selected.
+                    riskTier:
+                      type: string
+                      description: Estimated risk level of the action.
                   required: [type, target]
                 approval:
                   type: object

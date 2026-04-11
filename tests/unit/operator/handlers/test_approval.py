@@ -116,7 +116,7 @@ class TestCheckApprovalTimeout:
     async def test_not_timed_out_skips(self, mock_k8s) -> None:
         recent = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
         body = make_approval_request_body(
-            phase="Pending", timeout_minutes=30, creation_timestamp=recent
+            phase="Pending", timeout_seconds=1800, creation_timestamp=recent
         )
         await check_approval_timeout(body=body, name="ar-1", namespace=NS)
         mock_k8s["patch_status"].assert_not_awaited()
@@ -124,7 +124,7 @@ class TestCheckApprovalTimeout:
     async def test_timed_out_patches_ar_timed_out(self, mock_k8s) -> None:
         old_ts = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
         body = make_approval_request_body(
-            phase="Pending", timeout_minutes=30, creation_timestamp=old_ts, incident_ref="inc-1"
+            phase="Pending", timeout_seconds=1800, creation_timestamp=old_ts, incident_ref="inc-1"
         )
         await check_approval_timeout(body=body, name="ar-1", namespace=NS)
 
@@ -135,7 +135,7 @@ class TestCheckApprovalTimeout:
     async def test_timed_out_with_incident_ref_escalates_incident(self, mock_k8s) -> None:
         old_ts = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
         body = make_approval_request_body(
-            phase="Pending", timeout_minutes=30, creation_timestamp=old_ts, incident_ref="inc-1"
+            phase="Pending", timeout_seconds=1800, creation_timestamp=old_ts, incident_ref="inc-1"
         )
         await check_approval_timeout(body=body, name="ar-1", namespace=NS)
 
@@ -146,7 +146,7 @@ class TestCheckApprovalTimeout:
     async def test_timed_out_without_incident_ref_no_incident_patch(self, mock_k8s) -> None:
         old_ts = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
         body = make_approval_request_body(
-            phase="Pending", timeout_minutes=30, creation_timestamp=old_ts, incident_ref=""
+            phase="Pending", timeout_seconds=1800, creation_timestamp=old_ts, incident_ref=""
         )
         body["spec"]["incidentRef"] = ""
         await check_approval_timeout(body=body, name="ar-1", namespace=NS)

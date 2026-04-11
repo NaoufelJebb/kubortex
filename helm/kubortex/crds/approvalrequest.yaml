@@ -36,6 +36,9 @@ spec:
                   type: object
                   description: Action awaiting approval.
                   properties:
+                    id:
+                      type: string
+                      description: Stable identifier of the action within its remediation plan.
                     type:
                       type: string
                       description: Remediation action type.

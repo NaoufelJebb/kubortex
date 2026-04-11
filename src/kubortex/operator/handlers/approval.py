@@ -175,8 +175,8 @@ async def check_approval_timeout(
 
     Runs on a timer (interval=``settings.approval_check_interval``). Only
     acts when the request is still Pending — approved/rejected requests are
-    ignored. The timeout window is read from ``spec.timeoutMinutes``, falling
-    back to ``settings.approval_timeout_minutes`` when absent.
+    ignored. The timeout window is read from ``spec.timeoutSeconds``, falling
+    back to ``settings.approval_timeout_seconds`` when absent.
 
     On expiry: transitions ApprovalRequest → TimedOut and Incident →
     Escalated. This ensures the incident is never silently abandoned if the
@@ -192,12 +192,14 @@ async def check_approval_timeout(
         return
 
     created = body.get("metadata", {}).get("creationTimestamp")
-    timeout_minutes = body.get("spec", {}).get("timeoutMinutes", settings.approval_timeout_minutes)
+    timeout_seconds = body.get("spec", {}).get(
+        "timeoutSeconds", settings.approval_timeout_seconds
+    )
     if not created:
         return
 
     created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
-    if (datetime.now(UTC) - created_dt).total_seconds() > timeout_minutes * 60:
+    if (datetime.now(UTC) - created_dt).total_seconds() > timeout_seconds:
         await patch_status(
             APPROVAL_REQUESTS,
             name,

@@ -46,8 +46,10 @@ class ApprovalRequestSpec(BaseModel):
     investigation_ref: str = Field("", alias="investigationRef")
     remediation_plan_ref: str = Field(alias="remediationPlanRef")
     action: ApprovalActionDetail
-    investigation: ApprovalInvestigationContext | None = None
-    timeout_minutes: int = Field(30, alias="timeoutMinutes")
+    investigation_context: ApprovalInvestigationContext | None = Field(
+        None, alias="investigationContext"
+    )
+    timeout_seconds: int = Field(1800, alias="timeoutSeconds")
 
     model_config = {"populate_by_name": True}
 

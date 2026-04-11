@@ -267,11 +267,11 @@ async def _create_approval_request(
                 "rationale": action.rationale,
                 "riskTier": action.risk_tier,
             },
-            "investigation": {
+            "investigationContext": {
                 "hypothesis": plan_spec.hypothesis,
                 "confidence": plan_spec.confidence,
             },
-            "timeoutMinutes": settings.approval_timeout_minutes,
+            "timeoutSeconds": settings.approval_timeout_seconds,
         },
     }
     await create_resource(APPROVAL_REQUESTS, ar_body)

@@ -73,7 +73,7 @@ class OperatorSettings(SharedSettings):
     budget_reset_interval: int = 60
 
     # -- Approval -------------------------------------------------------------
-    approval_timeout_minutes: int = 30
+    approval_timeout_seconds: int = 1800
 
     # -- Retry ----------------------------------------------------------------
     max_retries: int = 2

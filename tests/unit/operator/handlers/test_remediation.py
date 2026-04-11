@@ -175,7 +175,7 @@ class TestCreateApprovalRequest:
         plan_spec, action = self._plan_spec_and_action()
         await _create_approval_request("rp-1", plan_spec, action, NS)
         body = mock_k8s["create_resource"].call_args.args[1]
-        assert body["spec"]["timeoutMinutes"] == settings.approval_timeout_minutes
+        assert body["spec"]["timeoutSeconds"] == settings.approval_timeout_seconds
 
     async def test_ar_body_labels_include_incident(self, mock_k8s) -> None:
         plan_spec, action = self._plan_spec_and_action()
