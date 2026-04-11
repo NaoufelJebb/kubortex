@@ -175,7 +175,7 @@ async def on_investigation_result(
             except ApiException as exc:
                 if exc.status == 409:
                     logger.info("remediation_plan_already_exists", name=rp_name)
-                elif exc.status != 404:
+                else:
                     raise
 
     except ApiException as exc:

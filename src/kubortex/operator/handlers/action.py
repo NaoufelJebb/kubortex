@@ -16,6 +16,7 @@ from kubernetes_asyncio.client import ApiException
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import ACTION_EXECUTIONS, INCIDENTS
 from kubortex.shared.crds import get_resource, patch_status
+from kubortex.shared.metrics import ACTIONS_EXECUTED
 from kubortex.shared.types import ActionExecutionPhase, IncidentPhase
 
 from ..budget import decrement_active, update_usage
@@ -104,6 +105,7 @@ async def on_action_result(
         return
 
     incident_ref = body.get("spec", {}).get("incidentRef", "")
+    action_type = body.get("spec", {}).get("action", {}).get("type", "unknown")
 
     # Check verification outcome
     verification = status.get("verification", {})
@@ -121,6 +123,7 @@ async def on_action_result(
                 raise
         if incident_ref:
             await _handle_failure(incident_ref, namespace)
+        ACTIONS_EXECUTED.labels(type=action_type, result="failed").inc()
         logger.warning("action_failed", name=name, error=status.get("error"))
     elif improved is False:
         try:
@@ -134,6 +137,7 @@ async def on_action_result(
                 raise
         if incident_ref:
             await _handle_failure(incident_ref, namespace)
+        ACTIONS_EXECUTED.labels(type=action_type, result="rolled_back").inc()
         logger.warning("action_rolled_back", name=name)
     else:
         try:
@@ -160,6 +164,7 @@ async def on_action_result(
                 if exc.status != 404:
                     raise
                 logger.warning("incident_gone_on_action_success", name=name, incident=incident_ref)
+        ACTIONS_EXECUTED.labels(type=action_type, result="succeeded").inc()
         logger.info("action_succeeded", name=name)
 
 

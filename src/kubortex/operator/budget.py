@@ -18,7 +18,8 @@ from kubernetes_asyncio.client import ApiException
 
 from kubortex.shared.constants import AUTONOMY_PROFILES
 from kubortex.shared.crds import get_resource, patch_status
-from kubortex.shared.models.autonomy import BudgetUsage
+from kubortex.shared.metrics import BUDGET_REMAINING
+from kubortex.shared.models.autonomy import AutonomyProfileSpec, BudgetUsage
 
 logger = structlog.get_logger(__name__)
 
@@ -137,6 +138,7 @@ async def update_usage(
                 resource_version=rv,
             )
             logger.info("budget_updated", profile=profile_name, attempt=attempt)
+            emit_budget_remaining(profile_name, resource.get("spec", {}), updated)
             return updated
         except ApiException as exc:
             if exc.status == 409 and attempt < _MAX_RETRIES - 1:
@@ -145,3 +147,37 @@ async def update_usage(
             raise
 
     raise RuntimeError("unreachable")  # pragma: no cover
+
+
+def emit_budget_remaining(
+    profile_name: str,
+    profile_spec: dict,
+    usage: BudgetUsage,
+) -> None:
+    """Publish remaining budget headroom as a gauge for each budget dimension.
+
+    Parses the profile spec through Pydantic, then computes
+    ``limit - used`` for pods-killed, rollbacks, scale-ups, and active
+    remediations. Failures are swallowed — observability must never break
+    the caller's write path.
+
+    Args:
+        profile_name: AutonomyProfile name (gauge label).
+        profile_spec: Raw spec dict from the profile resource.
+        usage: The committed ``BudgetUsage`` after the write.
+    """
+    try:
+        parsed = AutonomyProfileSpec.model_validate(profile_spec)
+        budgets = parsed.budgets
+    except Exception:
+        return
+    remaining = {
+        "pods_killed_per_hour": budgets.max_pods_killed_per_hour - usage.pods_killed_this_hour,
+        "rollbacks_per_day": budgets.max_rollbacks_per_day - usage.rollbacks_today,
+        "scale_ups_per_hour": budgets.max_scale_ups_per_hour - usage.scale_ups_this_hour,
+        "concurrent_remediations": (
+            budgets.max_concurrent_remediations - usage.active_remediations
+        ),
+    }
+    for budget_type, value in remaining.items():
+        BUDGET_REMAINING.labels(profile=profile_name, budget_type=budget_type).set(value)

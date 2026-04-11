@@ -13,7 +13,7 @@ from typing import Any
 import kopf
 import structlog
 
-from kubortex.operator.budget import reset_if_needed
+from kubortex.operator.budget import emit_budget_remaining, reset_if_needed
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import AUTONOMY_PROFILES
 from kubortex.shared.crds import patch_status
@@ -85,4 +85,5 @@ async def reset_budget_counters(
         name,
         {"budgetUsage": updated.model_dump(by_alias=True)},
     )
+    emit_budget_remaining(name, body.get("spec", {}), updated)
     logger.debug("budget_counters_reset", profile=name)

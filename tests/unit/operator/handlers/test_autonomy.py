@@ -67,7 +67,10 @@ class TestResetBudgetCounters:
         assert "lastResetDay" in usage
 
     async def test_recent_hour_same_day_no_patch(self, mock_k8s) -> None:
-        recent = _hours_ago(0.5)  # 30 minutes ago
+        # Pin to minute=45 so now-5min (minute=40) stays within the same hour
+        # regardless of the real wall-clock at test time.
+        now = datetime.now(UTC).replace(minute=45, second=0, microsecond=0)
+        recent = (now - timedelta(minutes=5)).isoformat()
         body = {
             "status": {
                 "budgetUsage": {
@@ -76,7 +79,16 @@ class TestResetBudgetCounters:
                 }
             }
         }
-        await reset_budget_counters(body=body, name="profile-1", namespace=NS)
+        # Patch datetime.now inside the budget module so reset_if_needed sees our pinned now.
+        from unittest.mock import patch as _patch
+
+        class _FixedDT(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now
+
+        with _patch("kubortex.operator.budget.datetime", _FixedDT):
+            await reset_budget_counters(body=body, name="profile-1", namespace=NS)
         mock_k8s["patch_status"].assert_not_awaited()
 
     async def test_old_hour_same_day_resets_hour_counters(self, mock_k8s) -> None:

@@ -21,7 +21,8 @@ from kubortex.shared.constants import (
     REMEDIATION_PLANS,
 )
 from kubortex.shared.crds import create_resource, get_resource, patch_spec, patch_status
-from kubortex.shared.models.autonomy import AutonomyProfileSpec
+from kubortex.shared.metrics import ACTIONS_DENIED
+from kubortex.shared.models.autonomy import AutonomyProfileSpec, BudgetUsage
 from kubortex.shared.models.remediation import PolicyEvaluationResult, RemediationPlanSpec
 from kubortex.shared.types import (
     ActionExecutionPhase,
@@ -115,8 +116,6 @@ async def on_remediation_plan_create(
 
     profile_spec = AutonomyProfileSpec.model_validate(profile_resource.get("spec", {}))
     # Read current usage for policy evaluation (snapshot — not used for the final write).
-    from kubortex.shared.models.autonomy import BudgetUsage
-
     budget_usage = BudgetUsage.model_validate(
         (profile_resource.get("status") or {}).get("budgetUsage", {})
     )
@@ -146,6 +145,10 @@ async def on_remediation_plan_create(
 
         if not decision.allowed:
             logger.warning("action_denied", action=action.id, reason=decision.deny_reason)
+            ACTIONS_DENIED.labels(
+                type=action.type,
+                reason=decision.deny_reason or "unknown",
+            ).inc()
             continue
 
         all_denied = False
@@ -181,6 +184,7 @@ async def on_remediation_plan_create(
     # Atomically increment budget for auto-approved actions using optimistic locking.
     if executed_action_types:
         def _apply_increments(usage: BudgetUsage) -> BudgetUsage:
+            """Fold every auto-approved action's increment into a single usage delta."""
             for action_type in executed_action_types:
                 usage = increment_usage(action_type, usage)
             return usage

@@ -20,6 +20,7 @@ from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import AUTONOMY_PROFILES, INCIDENTS, INVESTIGATIONS
 from kubortex.shared.crds import create_resource, get_resource, patch_status
 from kubortex.shared.kube_clients import get_kubernetes_clients
+from kubortex.shared.metrics import INCIDENTS_CREATED
 from kubortex.shared.models import IncidentSpec, IncidentStatus
 from kubortex.shared.models.autonomy import AutonomyProfileSpec, AutonomyScope
 from kubortex.shared.types import IncidentPhase, InvestigationPhase
@@ -43,6 +44,8 @@ async def on_incident_create(
     """
     spec = IncidentSpec.model_validate(body.get("spec", {}))
     logger.info("incident_created", name=name, severity=spec.severity, categories=spec.categories)
+    for category in spec.categories:
+        INCIDENTS_CREATED.labels(category=category, severity=spec.severity).inc()
 
     # Match AutonomyProfile
     profile_name = await _match_autonomy_profile(spec, namespace)
@@ -172,8 +175,14 @@ async def on_incident_failed(
                         ),
                     }
                 ]
-        except ApiException:
-            pass
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            logger.warning(
+                "prior_investigation_gone_on_retry",
+                name=name,
+                investigation=prev_inv_name,
+            )
 
     inv_body = _build_investigation(
         inv_name, name, namespace, spec, uid=incident_uid, prior_attempts=prior_attempts
@@ -375,7 +384,10 @@ async def _transition(name: str, namespace: str, phase: IncidentPhase, detail: s
     try:
         resource = await get_resource(INCIDENTS, name)
         existing_timeline = (resource.get("status") or {}).get("timeline", [])
-    except ApiException:
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
+        logger.warning("incident_gone_on_transition", name=name)
         existing_timeline = []
     new_entry = {
         "timestamp": datetime.now(UTC).isoformat(),

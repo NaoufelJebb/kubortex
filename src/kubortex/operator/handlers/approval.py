@@ -15,6 +15,7 @@ from kubernetes_asyncio.client import ApiException
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import ACTION_EXECUTIONS, APPROVAL_REQUESTS, INCIDENTS
 from kubortex.shared.crds import create_resource, get_resource, patch_status, resource_created_at
+from kubortex.shared.metrics import APPROVAL_WAIT
 from kubortex.shared.types import (
     ActionExecutionPhase,
     ApprovalRequestPhase,
@@ -55,11 +56,18 @@ async def on_approval_decision(
         new: Decision value written by the human (``approved`` or ``rejected``).
         old: Previous decision value (expected to be None).
     """
-    if not new or old:
+    if not new or old is not None:
         return
 
     spec = body.get("spec", {})
     incident_ref = spec.get("incidentRef", "")
+
+    # Observe how long the approval was pending before a decision was written.
+    try:
+        wait_seconds = (datetime.now(UTC) - resource_created_at(body)).total_seconds()
+        APPROVAL_WAIT.labels(outcome=new).observe(max(wait_seconds, 0.0))
+    except (KeyError, ValueError):
+        pass
 
     if new == DecisionType.APPROVED:
         try:
@@ -197,12 +205,14 @@ async def check_approval_timeout(
         "timeoutSeconds", settings.approval_timeout_seconds
     )
     created_dt = resource_created_at(body)
-    if (datetime.now(UTC) - created_dt).total_seconds() > timeout_seconds:
+    elapsed = (datetime.now(UTC) - created_dt).total_seconds()
+    if elapsed > timeout_seconds:
         await patch_status(
             APPROVAL_REQUESTS,
             name,
             {"phase": ApprovalRequestPhase.TIMED_OUT},
         )
+        APPROVAL_WAIT.labels(outcome="timed_out").observe(elapsed)
         incident_ref = body.get("spec", {}).get("incidentRef", "")
         if incident_ref:
             await patch_status(
