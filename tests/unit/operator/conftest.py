@@ -249,7 +249,7 @@ def mock_k8s(monkeypatch) -> dict:
 
     Top-level imports are patched on each handler module namespace.
     Lazy in-function imports are covered by patching kubortex.shared.k8s directly.
-    Budget helpers (load_usage, persist_usage, increment_usage, decrement_active) are also mocked.
+    Budget helpers (update_usage, increment_usage, decrement_active) are also mocked.
     """
     default_usage = BudgetUsage()
 
@@ -263,8 +263,6 @@ def mock_k8s(monkeypatch) -> dict:
         # Namespace label lookup (returns empty labels by default)
         "get_namespace_labels": AsyncMock(return_value={}),
         # Budget helpers
-        "load_usage": AsyncMock(return_value=default_usage),
-        "persist_usage": AsyncMock(return_value=None),
         "increment_usage": MagicMock(return_value=default_usage),
         "decrement_active": MagicMock(return_value=default_usage),
         "update_usage": AsyncMock(return_value=default_usage),
@@ -278,8 +276,6 @@ def mock_k8s(monkeypatch) -> dict:
         "patch_spec",
     ]
     budget_fns = [
-        "load_usage",
-        "persist_usage",
         "increment_usage",
         "decrement_active",
         "update_usage",

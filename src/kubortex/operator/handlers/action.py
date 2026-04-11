@@ -18,7 +18,7 @@ from kubortex.shared.constants import ACTION_EXECUTIONS, INCIDENTS
 from kubortex.shared.crds import get_resource, patch_status
 from kubortex.shared.types import ActionExecutionPhase, IncidentPhase
 
-from ..budget import decrement_active, load_usage, persist_usage
+from ..budget import decrement_active, update_usage
 
 logger = structlog.get_logger(__name__)
 
@@ -150,9 +150,7 @@ async def on_action_result(
                 incident = await get_resource(INCIDENTS, incident_ref)
                 profile_name = (incident.get("status") or {}).get("autonomyProfile", "")
                 if profile_name:
-                    usage = await load_usage(profile_name)
-                    usage = decrement_active(usage)
-                    await persist_usage(profile_name, usage)
+                    await update_usage(profile_name, decrement_active)
                 await patch_status(
                     INCIDENTS,
                     incident_ref,
@@ -193,9 +191,7 @@ async def _handle_failure(incident_ref: str, namespace: str) -> None:
     profile_name = status.get("autonomyProfile", "")
     if profile_name:
         try:
-            usage = await load_usage(profile_name)
-            usage = decrement_active(usage)
-            await persist_usage(profile_name, usage)
+            await update_usage(profile_name, decrement_active)
         except ApiException as exc:
             if exc.status != 404:
                 raise

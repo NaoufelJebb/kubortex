@@ -18,7 +18,7 @@ from kubernetes_asyncio.client import ApiException
 
 from kubortex.shared.constants import AUTONOMY_PROFILES
 from kubortex.shared.crds import get_resource, patch_status
-from kubortex.shared.models.autonomy import Budgets, BudgetUsage
+from kubortex.shared.models.autonomy import BudgetUsage
 
 logger = structlog.get_logger(__name__)
 
@@ -55,30 +55,6 @@ def reset_if_needed(usage: BudgetUsage, now: datetime | None = None) -> BudgetUs
         data["lastResetDay"] = now.isoformat()
 
     return BudgetUsage.model_validate(data)
-
-
-def check_budget(action_type: str, budgets: Budgets, usage: BudgetUsage) -> str | None:
-    """Check whether an action exceeds budget limits.
-
-    Args:
-        action_type: Action type to evaluate.
-        budgets: Budget limits.
-        usage: Current budget usage.
-
-    Returns:
-        Deny reason, or ``None`` when within budget.
-    """
-    if action_type == "restart-pod":
-        if usage.pods_killed_this_hour >= budgets.max_pods_killed_per_hour:
-            return "maxPodsKilledPerHour exhausted"
-    elif action_type == "rollback-deployment":
-        if usage.rollbacks_today >= budgets.max_rollbacks_per_day:
-            return "maxRollbacksPerDay exhausted"
-    elif action_type == "scale-up" and usage.scale_ups_this_hour >= budgets.max_scale_ups_per_hour:
-        return "maxScaleUpsPerHour exhausted"
-    if usage.active_remediations >= budgets.max_concurrent_remediations:
-        return "maxConcurrentRemediations exhausted"
-    return None
 
 
 def increment_usage(action_type: str, usage: BudgetUsage) -> BudgetUsage:
@@ -169,38 +145,3 @@ async def update_usage(
             raise
 
     raise RuntimeError("unreachable")  # pragma: no cover
-
-
-async def load_usage(profile_name: str) -> BudgetUsage:
-    """Load budget usage from an autonomy profile (read-only).
-
-    Prefer ``update_usage`` for any read-modify-write pattern.
-
-    Args:
-        profile_name: AutonomyProfile name.
-
-    Returns:
-        Current budget usage.
-    """
-    resource = await get_resource(AUTONOMY_PROFILES, profile_name)
-    raw = (resource.get("status") or {}).get("budgetUsage", {})
-    return BudgetUsage.model_validate(raw)
-
-
-async def persist_usage(profile_name: str, usage: BudgetUsage) -> None:
-    """Persist budget usage unconditionally (no conflict detection).
-
-    Use only for decrement-on-completion paths where the counter can only
-    go down and a lost write is self-correcting over time.  For increment
-    paths, use ``update_usage`` instead.
-
-    Args:
-        profile_name: AutonomyProfile name.
-        usage: Budget usage to persist.
-    """
-    await patch_status(
-        AUTONOMY_PROFILES,
-        profile_name,
-        {"budgetUsage": usage.model_dump(by_alias=True)},
-    )
-    logger.info("budget_usage_persisted", profile=profile_name)

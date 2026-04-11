@@ -114,16 +114,16 @@ class TestOnActionResult:
         body = make_action_execution_body(phase="Executing", incident_ref="inc-1", improved=True)
         await on_action_result(body=body, name="ae-1", namespace=NS, new="done")
 
-        mock_k8s["load_usage"].assert_awaited_once()
-        mock_k8s["decrement_active"].assert_called_once()
-        mock_k8s["persist_usage"].assert_awaited_once()
+        mock_k8s["update_usage"].assert_awaited_once()
+        call = mock_k8s["update_usage"].call_args
+        assert call.args[0] == "allow-profile"
 
     async def test_success_no_budget_decrement_when_no_profile(self, mock_k8s) -> None:
         mock_k8s["get_resource"].return_value = make_incident_body(profile=None)
         body = make_action_execution_body(phase="Executing", incident_ref="inc-1", improved=True)
         await on_action_result(body=body, name="ae-1", namespace=NS, new="done")
 
-        mock_k8s["decrement_active"].assert_not_called()
+        mock_k8s["update_usage"].assert_not_awaited()
 
     async def test_success_no_incident_ref_no_incident_patch(self, mock_k8s) -> None:
         body = make_action_execution_body(phase="Executing", incident_ref="")
@@ -156,9 +156,9 @@ class TestHandleFailure:
         )
         await _handle_failure("inc-1", NS)
 
-        mock_k8s["load_usage"].assert_awaited_once()
-        mock_k8s["decrement_active"].assert_called_once()
-        mock_k8s["persist_usage"].assert_awaited_once()
+        mock_k8s["update_usage"].assert_awaited_once()
+        call = mock_k8s["update_usage"].call_args
+        assert call.args[0] == "allow-profile"
 
     async def test_failure_no_budget_decrement_when_no_profile(self, mock_k8s) -> None:
         mock_k8s["get_resource"].return_value = make_incident_body(
@@ -166,7 +166,7 @@ class TestHandleFailure:
         )
         await _handle_failure("inc-1", NS)
 
-        mock_k8s["decrement_active"].assert_not_called()
+        mock_k8s["update_usage"].assert_not_awaited()
 
     async def test_at_max_retries_escalates(self, mock_k8s) -> None:
         mock_k8s["get_resource"].return_value = make_incident_body(retry_count=2, max_retries=2)

@@ -3,20 +3,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, patch
-
-import pytest
 
 from kubortex.operator.budget import (
-    check_budget,
     decrement_active,
     increment_usage,
-    load_usage,
-    persist_usage,
     reset_if_needed,
 )
-from kubortex.shared.models.autonomy import Budgets, BudgetUsage
-
+from kubortex.shared.models.autonomy import BudgetUsage
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -25,10 +18,6 @@ from kubortex.shared.models.autonomy import Budgets, BudgetUsage
 
 def _usage(**kwargs) -> BudgetUsage:
     return BudgetUsage.model_validate(kwargs)
-
-
-def _budgets(**kwargs) -> Budgets:
-    return Budgets.model_validate(kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -124,66 +113,6 @@ class TestResetIfNeeded:
 
 
 # ---------------------------------------------------------------------------
-# check_budget
-# ---------------------------------------------------------------------------
-
-
-class TestCheckBudget:
-    def test_restart_pod_at_limit_denied(self) -> None:
-        budgets = _budgets(maxPodsKilledPerHour=5)
-        usage = _usage(podsKilledThisHour=5)
-        reason = check_budget("restart-pod", budgets, usage)
-        assert reason is not None
-        assert "maxPodsKilledPerHour" in reason
-
-    def test_restart_pod_under_limit_allowed(self) -> None:
-        budgets = _budgets(maxPodsKilledPerHour=5)
-        usage = _usage(podsKilledThisHour=4)
-        assert check_budget("restart-pod", budgets, usage) is None
-
-    def test_rollback_deployment_at_limit_denied(self) -> None:
-        budgets = _budgets(maxRollbacksPerDay=3)
-        usage = _usage(rollbacksToday=3)
-        reason = check_budget("rollback-deployment", budgets, usage)
-        assert reason is not None
-        assert "maxRollbacksPerDay" in reason
-
-    def test_rollback_deployment_under_limit_allowed(self) -> None:
-        budgets = _budgets(maxRollbacksPerDay=3)
-        usage = _usage(rollbacksToday=2)
-        assert check_budget("rollback-deployment", budgets, usage) is None
-
-    def test_scale_up_at_limit_denied(self) -> None:
-        budgets = _budgets(maxScaleUpsPerHour=10)
-        usage = _usage(scaleUpsThisHour=10)
-        reason = check_budget("scale-up", budgets, usage)
-        assert reason is not None
-        assert "maxScaleUpsPerHour" in reason
-
-    def test_scale_up_under_limit_allowed(self) -> None:
-        budgets = _budgets(maxScaleUpsPerHour=10)
-        usage = _usage(scaleUpsThisHour=9)
-        assert check_budget("scale-up", budgets, usage) is None
-
-    def test_concurrent_remediations_at_limit_denied(self) -> None:
-        budgets = _budgets(maxConcurrentRemediations=2)
-        usage = _usage(activeRemediations=2)
-        reason = check_budget("restart-pod", budgets, usage)
-        assert reason is not None
-        assert "maxConcurrentRemediations" in reason
-
-    def test_concurrent_remediations_under_limit_allowed(self) -> None:
-        budgets = _budgets(maxConcurrentRemediations=2)
-        usage = _usage(activeRemediations=1)
-        assert check_budget("restart-pod", budgets, usage) is None
-
-    def test_unknown_action_type_only_checks_concurrent(self) -> None:
-        budgets = _budgets(maxConcurrentRemediations=2)
-        usage = _usage(activeRemediations=0)
-        assert check_budget("unknown-action", budgets, usage) is None
-
-
-# ---------------------------------------------------------------------------
 # increment_usage
 # ---------------------------------------------------------------------------
 
@@ -243,76 +172,3 @@ class TestDecrementActive:
         assert usage.active_remediations == 2
 
 
-# ---------------------------------------------------------------------------
-# persist_usage (async — patches patch_status)
-# ---------------------------------------------------------------------------
-
-
-class TestPersistUsage:
-    @pytest.mark.asyncio
-    async def test_calls_patch_status_with_budget_usage(self) -> None:
-        usage = _usage(podsKilledThisHour=3, activeRemediations=1)
-        mock_patch = AsyncMock(return_value={})
-        with patch("kubortex.operator.budget.patch_status", mock_patch):
-            await persist_usage("my-profile", usage)
-
-        mock_patch.assert_awaited_once()
-        plural, name, patch_body = mock_patch.call_args.args
-        assert plural == "autonomyprofiles"
-        assert name == "my-profile"
-        assert patch_body["budgetUsage"]["podsKilledThisHour"] == 3
-        assert patch_body["budgetUsage"]["activeRemediations"] == 1
-
-    @pytest.mark.asyncio
-    async def test_serializes_with_camel_case_aliases(self) -> None:
-        usage = _usage(rollbacksToday=2)
-        mock_patch = AsyncMock(return_value={})
-        with patch("kubortex.operator.budget.patch_status", mock_patch):
-            await persist_usage("profile-x", usage)
-
-        patch_body = mock_patch.call_args.args[2]
-        assert "rollbacksToday" in patch_body["budgetUsage"]
-
-
-# ---------------------------------------------------------------------------
-# load_usage (async — patches get_resource)
-# ---------------------------------------------------------------------------
-
-
-class TestLoadUsage:
-    @pytest.mark.asyncio
-    async def test_returns_budget_usage_from_resource(self) -> None:
-        resource = {
-            "status": {
-                "budgetUsage": {
-                    "podsKilledThisHour": 2,
-                    "rollbacksToday": 1,
-                    "activeRemediations": 0,
-                }
-            }
-        }
-        mock_get = AsyncMock(return_value=resource)
-        with patch("kubortex.operator.budget.get_resource", mock_get):
-            result = await load_usage("my-profile")
-
-        assert result.pods_killed_this_hour == 2
-        assert result.rollbacks_today == 1
-        mock_get.assert_awaited_once_with("autonomyprofiles", "my-profile")
-
-    @pytest.mark.asyncio
-    async def test_missing_status_returns_defaults(self) -> None:
-        mock_get = AsyncMock(return_value={})
-        with patch("kubortex.operator.budget.get_resource", mock_get):
-            result = await load_usage("empty-profile")
-
-        assert result.pods_killed_this_hour == 0
-        assert result.active_remediations == 0
-
-    @pytest.mark.asyncio
-    async def test_missing_budget_usage_returns_defaults(self) -> None:
-        mock_get = AsyncMock(return_value={"status": {}})
-        with patch("kubortex.operator.budget.get_resource", mock_get):
-            result = await load_usage("no-budget-profile")
-
-        assert result.rollbacks_today == 0
-        assert result.scale_ups_this_hour == 0
