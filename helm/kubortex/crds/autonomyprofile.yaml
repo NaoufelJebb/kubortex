@@ -102,9 +102,6 @@ spec:
                     afterRemediationSeconds:
                       type: integer
                       description: Cooldown after a successful remediation.
-                    afterFailedSeconds:
-                      type: integer
-                      description: Cooldown after a failed remediation.
                 escalationDeadlineMinutes:
                   type: integer
                   description: Minutes before an uninvestigated incident is escalated.
@@ -164,10 +161,6 @@ spec:
               type: object
               description: Current activation state and budget consumption.
               properties:
-                phase:
-                  type: string
-                  description: Whether the profile is active or suspended.
-                  enum: [Active, Suspended]
                 budgetUsage:
                   type: object
                   description: Tracked usage against configured action budgets.
@@ -192,20 +185,7 @@ spec:
                       type: string
                       description: Time the daily counters were last reset.
                       format: date-time
-                conditions:
-                  type: array
-                  description: Standard Kubernetes condition list for the profile.
-                  items:
-                    type: object
-                    x-kubernetes-preserve-unknown-fields: true
-                lastValidated:
-                  type: string
-                  description: Time the profile was last validated by the controller.
-                  format: date-time
       additionalPrinterColumns:
-        - name: Phase
-          type: string
-          jsonPath: .status.phase
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp

@@ -8,8 +8,6 @@ from pydantic import BaseModel, Field
 
 from kubortex.shared.types import ApprovalLevel, Category, Severity
 
-from .incident import Condition
-
 # ---------------------------------------------------------------------------
 # Sub-models
 # ---------------------------------------------------------------------------
@@ -49,7 +47,6 @@ class Budgets(BaseModel):
 
 class CooldownConfig(BaseModel):
     after_remediation_seconds: int = Field(300, alias="afterRemediationSeconds")
-    after_failed_seconds: int = Field(900, alias="afterFailedSeconds")
 
     model_config = {"populate_by_name": True}
 
@@ -118,6 +115,5 @@ class AutonomyProfileSpec(BaseModel):
 
 class AutonomyProfileStatus(BaseModel):
     budget_usage: BudgetUsage = Field(default_factory=BudgetUsage, alias="budgetUsage")
-    conditions: list[Condition] = Field(default_factory=list)
 
     model_config = {"populate_by_name": True}

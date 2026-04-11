@@ -69,10 +69,6 @@ spec:
                   type: object
                   description: Investigation data supplied to approvers.
                   x-kubernetes-preserve-unknown-fields: true
-                approvalLevel:
-                  type: string
-                  description: Approval role required before execution.
-                  enum: [team-lead, sre-manager, security-team]
                 timeoutSeconds:
                   type: integer
                   description: Time allowed for a decision before timeout.
@@ -103,9 +99,6 @@ spec:
         - name: Phase
           type: string
           jsonPath: .status.phase
-        - name: Level
-          type: string
-          jsonPath: .spec.approvalLevel
         - name: Action
           type: string
           jsonPath: .spec.action.type

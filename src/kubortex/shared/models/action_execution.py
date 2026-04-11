@@ -76,7 +76,6 @@ class ActionExecutionStatus(BaseModel):
     phase: ActionExecutionPhase = ActionExecutionPhase.APPROVED
     claimed_by: str = Field("", alias="claimedBy")
     claimed_at: datetime | None = Field(None, alias="claimedAt")
-    executed_at: datetime | None = Field(None, alias="executedAt")
     completed_at: datetime | None = Field(None, alias="completedAt")
     result: dict[str, Any] | None = None
     error: str | None = None
