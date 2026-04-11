@@ -14,7 +14,7 @@ from kubernetes_asyncio.client import ApiException
 
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import ACTION_EXECUTIONS, APPROVAL_REQUESTS, INCIDENTS
-from kubortex.shared.crds import create_resource, get_resource, patch_status
+from kubortex.shared.crds import create_resource, get_resource, patch_status, resource_created_at
 from kubortex.shared.types import (
     ActionExecutionPhase,
     ApprovalRequestPhase,
@@ -191,14 +191,12 @@ async def check_approval_timeout(
     if status.get("phase") != ApprovalRequestPhase.PENDING:
         return
 
-    created = body.get("metadata", {}).get("creationTimestamp")
+    if not body.get("metadata", {}).get("creationTimestamp"):
+        return
     timeout_seconds = body.get("spec", {}).get(
         "timeoutSeconds", settings.approval_timeout_seconds
     )
-    if not created:
-        return
-
-    created_dt = datetime.fromisoformat(created.replace("Z", "+00:00"))
+    created_dt = resource_created_at(body)
     if (datetime.now(UTC) - created_dt).total_seconds() > timeout_seconds:
         await patch_status(
             APPROVAL_REQUESTS,

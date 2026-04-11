@@ -16,12 +16,12 @@ from datetime import UTC, datetime
 import structlog
 from kubernetes_asyncio.client import ApiException
 
+from kubortex.shared.constants import AUTONOMY_PROFILES
 from kubortex.shared.crds import get_resource, patch_status
 from kubortex.shared.models.autonomy import Budgets, BudgetUsage
 
 logger = structlog.get_logger(__name__)
 
-AUTONOMY_PLURAL = "autonomyprofiles"
 _MAX_RETRIES = 5
 
 
@@ -148,14 +148,14 @@ async def update_usage(
         Exception: Re-raised if the profile cannot be fetched.
     """
     for attempt in range(_MAX_RETRIES):
-        resource = await get_resource(AUTONOMY_PLURAL, profile_name)
+        resource = await get_resource(AUTONOMY_PROFILES, profile_name)
         rv = resource["metadata"]["resourceVersion"]
         raw = (resource.get("status") or {}).get("budgetUsage", {})
         current = BudgetUsage.model_validate(raw)
         updated = transform(current)
         try:
             await patch_status(
-                AUTONOMY_PLURAL,
+                AUTONOMY_PROFILES,
                 profile_name,
                 {"budgetUsage": updated.model_dump(by_alias=True)},
                 resource_version=rv,
@@ -182,7 +182,7 @@ async def load_usage(profile_name: str) -> BudgetUsage:
     Returns:
         Current budget usage.
     """
-    resource = await get_resource(AUTONOMY_PLURAL, profile_name)
+    resource = await get_resource(AUTONOMY_PROFILES, profile_name)
     raw = (resource.get("status") or {}).get("budgetUsage", {})
     return BudgetUsage.model_validate(raw)
 
@@ -199,7 +199,7 @@ async def persist_usage(profile_name: str, usage: BudgetUsage) -> None:
         usage: Budget usage to persist.
     """
     await patch_status(
-        AUTONOMY_PLURAL,
+        AUTONOMY_PROFILES,
         profile_name,
         {"budgetUsage": usage.model_dump(by_alias=True)},
     )

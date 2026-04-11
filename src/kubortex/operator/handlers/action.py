@@ -182,7 +182,7 @@ async def _handle_failure(incident_ref: str, namespace: str) -> None:
         namespace: Namespace of the parent Incident.
     """
     try:
-        incident = await get_resource("incidents", incident_ref)
+        incident = await get_resource(INCIDENTS, incident_ref)
     except ApiException as exc:
         if exc.status == 404:
             logger.warning("incident_gone_on_action_failure", incident=incident_ref)

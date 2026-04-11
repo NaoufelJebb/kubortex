@@ -70,7 +70,7 @@ async def on_remediation_plan_create(
     """
     plan_spec = RemediationPlanSpec.model_validate(body.get("spec", {}))
     try:
-        incident = await get_resource("incidents", plan_spec.incident_ref)
+        incident = await get_resource(INCIDENTS, plan_spec.incident_ref)
     except ApiException as exc:
         if exc.status == 404:
             logger.warning("incident_gone_on_plan_create", plan=name, incident=plan_spec.incident_ref)

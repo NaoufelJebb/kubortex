@@ -1,17 +1,23 @@
-"""Kopf handler for AutonomyProfile CRD validation and budget resets."""
+"""Kopf handlers for AutonomyProfile validation and periodic budget window resets.
+
+On create/update the profile spec is validated through the Pydantic model
+and rejected as a ``kopf.PermanentError`` on failure. A timer handler rolls
+over the per-hour and per-day budget counters whenever their windows
+expire, so policy evaluations always see up-to-date usage.
+"""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 import kopf
 import structlog
 
+from kubortex.operator.budget import reset_if_needed
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import AUTONOMY_PROFILES
 from kubortex.shared.crds import patch_status
-from kubortex.shared.models.autonomy import AutonomyProfileSpec
+from kubortex.shared.models.autonomy import AutonomyProfileSpec, BudgetUsage
 
 logger = structlog.get_logger(__name__)
 
@@ -56,57 +62,27 @@ async def reset_budget_counters(
 ) -> None:
     """Roll over per-hour and per-day budget counters when their windows expire.
 
-    Reads ``status.budgetUsage.lastResetHour`` and ``lastResetDay`` to decide
-    whether a reset is due:
-    - Hour window: resets ``podsKilledThisHour`` and ``scaleUpsThisHour``
-      when ≥ 3600 seconds have elapsed since the last reset.
-    - Day window: resets ``rollbacksToday`` when the calendar date has
-      changed (UTC) since the last reset.
-
-    On first run (no timestamp stored), the timestamps are initialised without
-    zeroing the counters — the assumption is that any existing usage was
-    accumulated in the current window.
-
-    Only writes to the API when at least one counter was changed, avoiding
-    unnecessary patch calls on every timer tick.
+    Delegates to ``operator.budget.reset_if_needed`` — the single source of
+    truth for hour/day rollover logic. The timer handler validates the raw
+    ``status.budgetUsage`` through Pydantic, runs the reset, and only patches
+    when the result differs from what was read. This avoids an unconditional
+    first-run patch when nothing legitimately changed.
 
     Args:
         body: AutonomyProfile resource body.
         name: AutonomyProfile name.
         namespace: AutonomyProfile namespace.
     """
-    status = body.get("status", {})
-    usage = status.get("budgetUsage", {})
-    now = datetime.now(UTC)
-    changed = False
+    raw = (body.get("status") or {}).get("budgetUsage", {})
+    current = BudgetUsage.model_validate(raw)
+    updated = reset_if_needed(current)
 
-    last_hour_str = usage.get("lastResetHour")
-    if last_hour_str:
-        last_hour = datetime.fromisoformat(last_hour_str.replace("Z", "+00:00"))
-        if (now - last_hour).total_seconds() >= 3600:
-            usage["podsKilledThisHour"] = 0
-            usage["scaleUpsThisHour"] = 0
-            usage["lastResetHour"] = now.isoformat()
-            changed = True
-    else:
-        usage["lastResetHour"] = now.isoformat()
-        changed = True
+    if updated == current:
+        return
 
-    last_day_str = usage.get("lastResetDay")
-    if last_day_str:
-        last_day = datetime.fromisoformat(last_day_str.replace("Z", "+00:00"))
-        if now.date() != last_day.date():
-            usage["rollbacksToday"] = 0
-            usage["lastResetDay"] = now.isoformat()
-            changed = True
-    else:
-        usage["lastResetDay"] = now.isoformat()
-        changed = True
-
-    if changed:
-        await patch_status(
-            AUTONOMY_PROFILES,
-            name,
-            {"budgetUsage": usage},
-        )
-        logger.debug("budget_counters_reset", profile=name)
+    await patch_status(
+        AUTONOMY_PROFILES,
+        name,
+        {"budgetUsage": updated.model_dump(by_alias=True)},
+    )
+    logger.debug("budget_counters_reset", profile=name)
