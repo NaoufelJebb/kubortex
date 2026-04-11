@@ -19,6 +19,7 @@ from kubernetes_asyncio.client import ApiException
 from kubortex.operator.settings import GROUP, VERSION, settings
 from kubortex.shared.constants import AUTONOMY_PROFILES, INCIDENTS, INVESTIGATIONS
 from kubortex.shared.crds import create_resource, get_resource, patch_status
+from kubortex.shared.kube_clients import get_kubernetes_clients
 from kubortex.shared.models import IncidentSpec, IncidentStatus
 from kubortex.shared.models.autonomy import AutonomyProfileSpec, AutonomyScope
 from kubortex.shared.types import IncidentPhase, InvestigationPhase
@@ -239,18 +240,20 @@ async def check_escalation_deadline(
 async def _get_namespace_labels(namespace: str) -> dict[str, str]:
     """Fetch a namespace's labels for label-selector matching.
 
+    Uses the shared, process-scoped Kubernetes client bundle so the
+    connection pool is reused across incidents. Best-effort: any failure
+    returns an empty dict so an incident is never blocked by a label
+    lookup hiccup.
+
     Args:
         namespace: Kubernetes namespace name.
 
     Returns:
         Label dict for the namespace, or empty dict when unreadable.
     """
-    from kubernetes_asyncio import client as k8s_client
-
     try:
-        async with k8s_client.ApiClient() as api_client:
-            v1 = k8s_client.CoreV1Api(api_client)
-            ns_obj = await v1.read_namespace(namespace, _request_timeout=3.0)
+        clients = await get_kubernetes_clients()
+        ns_obj = await clients.core_v1.read_namespace(namespace, _request_timeout=3.0)
         return dict(ns_obj.metadata.labels or {})
     except Exception:
         logger.warning("namespace_labels_unreadable")
