@@ -9,6 +9,7 @@ The operator is the sole lifecycle governor. This handler:
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -26,6 +27,62 @@ from kubortex.shared.models.autonomy import AutonomyProfileSpec, AutonomyScope
 from kubortex.shared.types import IncidentPhase, InvestigationPhase
 
 logger = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# AutonomyProfile list cache
+# ---------------------------------------------------------------------------
+#
+# Every Incident creation matches against the full AutonomyProfile list. That
+# was a full apiserver list on the hot path — scaling poorly as the number of
+# profiles grows. A small async-lock-protected TTL cache keeps the list in
+# memory for a few seconds so bursts of incidents share a single API call.
+# The TTL is intentionally short: any newly applied profile becomes effective
+# within ``_PROFILE_CACHE_TTL`` seconds. A kopf indexer would be the optimal
+# long-term fix but is disproportionate for the current scale.
+
+_PROFILE_CACHE_TTL = 10.0  # seconds
+_profile_cache: tuple[float, list[dict[str, Any]]] | None = None
+_profile_cache_lock = asyncio.Lock()
+
+
+async def _list_autonomy_profiles_cached() -> list[dict[str, Any]]:
+    """Return the AutonomyProfile list, served from an in-process TTL cache.
+
+    The cache is invalidated after ``_PROFILE_CACHE_TTL`` seconds. Concurrent
+    callers during a miss coalesce behind a single asyncio.Lock so only one
+    apiserver list happens per refresh window.
+
+    Returns:
+        List of AutonomyProfile resource dicts (possibly empty).
+    """
+    from kubortex.shared.crds import list_resources
+
+    global _profile_cache
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    cached = _profile_cache
+    if cached is not None and now - cached[0] < _PROFILE_CACHE_TTL:
+        return cached[1]
+
+    async with _profile_cache_lock:
+        # Re-check under the lock in case another coroutine refreshed while we waited.
+        cached = _profile_cache
+        now = loop.time()
+        if cached is not None and now - cached[0] < _PROFILE_CACHE_TTL:
+            return cached[1]
+        profiles = await list_resources(AUTONOMY_PROFILES)
+        _profile_cache = (now, profiles)
+        return profiles
+
+
+def _invalidate_profile_cache() -> None:
+    """Force the next profile lookup to hit the apiserver.
+
+    Used by tests and can be called from handlers that know a profile has
+    just changed (none at the moment — the TTL handles staleness).
+    """
+    global _profile_cache
+    _profile_cache = None
 
 
 @kopf.on.create(GROUP, VERSION, INCIDENTS)
@@ -340,9 +397,7 @@ async def _match_autonomy_profile(spec: IncidentSpec, namespace: str) -> str | N
     Returns:
         Name of the best-matching profile, or ``None`` when none match.
     """
-    from kubortex.shared.crds import list_resources
-
-    profiles = await list_resources(AUTONOMY_PROFILES)
+    profiles = await _list_autonomy_profiles_cached()
 
     # Fetch namespace labels once — needed only when any profile uses matchLabels
     target_ns = spec.target_ref.namespace if spec.target_ref else None

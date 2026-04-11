@@ -343,6 +343,14 @@ class TestMatchAutonomyProfile:
         await _match_autonomy_profile(self._spec(target_ns=None), "ns")
         mock_k8s["get_namespace_labels"].assert_not_awaited()
 
+    async def test_cache_serves_repeated_lookups_from_memory(self, mock_k8s) -> None:
+        mock_k8s["list_resources"].return_value = [make_autonomy_profile_resource("p")]
+        await _match_autonomy_profile(self._spec(), "ns")
+        await _match_autonomy_profile(self._spec(), "ns")
+        await _match_autonomy_profile(self._spec(), "ns")
+        # Only one apiserver list per TTL window, regardless of call count.
+        assert mock_k8s["list_resources"].await_count == 1
+
 
 # ---------------------------------------------------------------------------
 # _transition

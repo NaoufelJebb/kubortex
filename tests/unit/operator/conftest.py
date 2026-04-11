@@ -243,6 +243,19 @@ def make_action_execution_body(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _reset_profile_cache() -> None:
+    """Clear the AutonomyProfile TTL cache between tests.
+
+    The cache is a module-level global in ``operator.handlers.incident``, so
+    a stale entry from one test would otherwise leak into the next and mask
+    its ``list_resources`` mock.
+    """
+    from kubortex.operator.handlers.incident import _invalidate_profile_cache
+
+    _invalidate_profile_cache()
+
+
 @pytest.fixture()
 def mock_k8s(monkeypatch) -> dict:
     """Patch all kubortex.shared.k8s functions and budget helpers in operator handler modules.
