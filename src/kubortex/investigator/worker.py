@@ -80,6 +80,10 @@ class InvestigatorWorker:
 
     async def _poll_and_process(self) -> None:
         """Find pending Investigations, claim one, and run it."""
+        # TODO(perf): list_resources fetches all Investigations regardless of
+        # phase and filters client-side.  Once the operator sets a
+        # ``kubortex.io/phase`` label on create/transition, switch to
+        # label_selector="kubortex.io/phase=Pending" to reduce API load.
         investigations = await list_resources(INVESTIGATIONS)
         pending = [
             inv
