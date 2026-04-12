@@ -125,12 +125,14 @@ class CapabilityGateway:
 
 
 def _error_result(msg: str) -> SkillResult:
+    """Build a failed ``SkillResult`` with the given error message."""
     return SkillResult(success=False, error=msg)
 
 
 def _record(
     skill: str, latency_ms: float, output_size: int, error: str | None = None
 ) -> SkillInvocationRecord:
+    """Build a ``SkillInvocationRecord`` for telemetry."""
     return SkillInvocationRecord(
         skill=skill,
         latencyMs=latency_ms,

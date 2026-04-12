@@ -29,6 +29,12 @@ class PayloadStore:
         settings: InvestigatorSettings,
         root: Path | None = None,
     ) -> None:
+        """Initialise the store from investigator settings.
+
+        Args:
+            settings: Investigator configuration (provides path and size limits).
+            root: Override root directory (mainly for testing).
+        """
         self._root = root or Path(settings.payload_store_path)
         self._max_size = settings.payload_max_size_bytes
 

@@ -43,6 +43,11 @@ class InvestigatorWorker:
     """Watches for pending Investigations and runs the ReAct graph."""
 
     def __init__(self, settings: InvestigatorSettings) -> None:
+        """Initialise registries, learning system, and gateway.
+
+        Args:
+            settings: Investigator configuration loaded from env vars.
+        """
         self._settings = settings
 
         self._skill_registry = SkillRegistry()
@@ -274,7 +279,14 @@ class InvestigatorWorker:
             )
 
     def _build_llm(self) -> Any:
-        """Construct the LLM client based on settings."""
+        """Construct the LLM client based on settings.
+
+        Returns:
+            A LangChain chat model instance configured from settings.
+
+        Raises:
+            ValueError: If ``llm_provider`` is not ``"openai"``.
+        """
         provider = self._settings.llm_provider
         if provider != "openai":
             raise ValueError(
@@ -297,6 +309,9 @@ class InvestigatorWorker:
         The lambda body is intentionally a no-op — actual routing is handled
         by the invoke node through the CapabilityGateway.  SkillInput provides
         the args schema so the LLM produces well-formed tool calls.
+
+        Returns:
+            List of ``StructuredTool`` instances, one per registered skill.
         """
         tools = []
         for meta in self._skill_registry.list_metadata():

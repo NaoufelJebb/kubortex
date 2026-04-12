@@ -15,6 +15,11 @@ class LearningStore:
     """Simple file-backed store for diagnostic scores, keyed by (category, targetKind)."""
 
     def __init__(self, store_path: str | Path) -> None:
+        """Initialise the store, creating the directory if needed.
+
+        Args:
+            store_path: Filesystem directory for score JSON files.
+        """
         self._path = Path(store_path)
         self._path.mkdir(parents=True, exist_ok=True)
 

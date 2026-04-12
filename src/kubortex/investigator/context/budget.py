@@ -27,7 +27,14 @@ class ContextBudget:
     # ------------------------------------------------------------------
 
     def count(self, text: str) -> int:
-        """Return the token count for *text*."""
+        """Return the token count for *text*.
+
+        Args:
+            text: Input string to tokenise.
+
+        Returns:
+            Number of tokens produced by the model's tokeniser.
+        """
         return len(self._enc.encode(text))
 
     # ------------------------------------------------------------------
@@ -35,15 +42,30 @@ class ContextBudget:
     # ------------------------------------------------------------------
 
     def add(self, text: str) -> None:
-        """Charge *text* against the budget."""
+        """Charge *text* against the budget.
+
+        Args:
+            text: Content being added to the context window.
+        """
         self.used_tokens += self.count(text)
 
     def evict(self, text: str) -> None:
-        """Reclaim tokens when *text* is removed from context."""
+        """Reclaim tokens when *text* is removed from context.
+
+        Args:
+            text: Content being removed from the context window.
+        """
         self.used_tokens = max(0, self.used_tokens - self.count(text))
 
     def evict_tokens(self, n: int) -> None:
-        """Reclaim a known token count directly (use when original text is unavailable)."""
+        """Reclaim a known token count directly.
+
+        Use when the original text is unavailable (e.g. after message
+        eviction).
+
+        Args:
+            n: Number of tokens to reclaim.
+        """
         self.used_tokens = max(0, self.used_tokens - n)
     # ------------------------------------------------------------------
     # Budget queries
