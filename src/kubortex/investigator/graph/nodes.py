@@ -79,6 +79,10 @@ async def invoke(
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
         return {}
 
+    # Only the first tool call is executed per iteration.  The graph loops
+    # back through reason → invoke so the LLM can issue the next call on the
+    # following cycle.  This keeps evidence gathering sequential, simplifies
+    # gateway rate-limiting, and avoids parallel payload writes.
     tool_call = last_msg.tool_calls[0]
     skill_name = tool_call["name"]
     args = tool_call.get("args", {})
@@ -127,6 +131,17 @@ async def invoke(
         tool_call_id=tool_call["id"],
     )
     updates.setdefault("messages", []).append(tool_msg)
+
+    # Reply with error ToolMessages for any additional tool calls that were
+    # not executed, so the LLM knows they were dropped rather than assuming
+    # they succeeded silently.
+    for extra in last_msg.tool_calls[1:]:
+        updates["messages"].append(
+            ToolMessage(
+                content="Not executed: only one skill is invoked per iteration.",
+                tool_call_id=extra["id"],
+            )
+        )
 
     # Carry the raw result for payload writing in summarise
     updates["_last_result"] = result
