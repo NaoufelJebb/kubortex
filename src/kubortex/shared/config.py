@@ -94,7 +94,7 @@ class InvestigatorSettings(SharedSettings):
     - ``KUBORTEX_MAX_ITERATIONS``, ``KUBORTEX_TIMEOUT_SECONDS``,
       ``KUBORTEX_CHECKPOINT_PATH``
     - ``KUBORTEX_SKILLS_DIR``, ``KUBORTEX_RUNBOOKS_DIR``
-    - ``KUBORTEX_CONTEXT_MAX_CHARS``
+    - ``KUBORTEX_CONTEXT_MAX_TOKENS``
     """
 
     # -- Worker identity (Kubernetes downward API or KUBORTEX_ prefix) -------

@@ -102,6 +102,9 @@ spec:
                   type: object
                   description: Execution telemetry collected during the investigation.
                   x-kubernetes-preserve-unknown-fields: true
+                selectedRunbook:
+                  type: string
+                  description: Name of the runbook matched by the investigator, if any.
       additionalPrinterColumns:
         - name: Phase
           type: string
