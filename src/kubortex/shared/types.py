@@ -48,6 +48,8 @@ class InvestigationPhase(StrEnum):
     PENDING = "Pending"
     IN_PROGRESS = "InProgress"
     COMPLETED = "Completed"
+    TIMED_OUT = "TimedOut"
+    FAILED = "Failed"
 
 
 class RemediationPlanPhase(StrEnum):

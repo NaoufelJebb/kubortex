@@ -26,6 +26,7 @@ from kubortex.investigator.skills.gateway import CapabilityGateway
 from kubortex.investigator.skills.models import SkillInput
 from kubortex.investigator.skills.registry import SkillRegistry
 from kubortex.shared.config import InvestigatorSettings
+from kubortex.shared.constants import INVESTIGATIONS
 from kubortex.shared.crds import list_resources, patch_status, try_claim
 from kubortex.shared.metrics import (
     INVESTIGATION_CLAIMS,
@@ -33,6 +34,7 @@ from kubortex.shared.metrics import (
     INVESTIGATION_DURATION,
 )
 from kubortex.shared.models.investigation import InvestigationResult
+from kubortex.shared.types import InvestigationPhase
 
 logger = structlog.get_logger(__name__)
 
@@ -78,11 +80,11 @@ class InvestigatorWorker:
 
     async def _poll_and_process(self) -> None:
         """Find pending Investigations, claim one, and run it."""
-        investigations = await list_resources("investigations")
+        investigations = await list_resources(INVESTIGATIONS)
         pending = [
             inv
             for inv in investigations
-            if (inv.get("status") or {}).get("phase") == "Pending"
+            if (inv.get("status") or {}).get("phase") == InvestigationPhase.PENDING
             and not (inv.get("status") or {}).get("claimedBy")
         ]
 
@@ -91,7 +93,7 @@ class InvestigatorWorker:
 
         for inv in pending:
             name = inv["metadata"]["name"]
-            claimed = await try_claim("investigations", name, self._settings.pod_name)
+            claimed = await try_claim(INVESTIGATIONS, name, self._settings.pod_name)
             INVESTIGATION_CLAIMS.labels(result="won" if claimed else "lost").inc()
             if claimed:
                 await self._run_investigation(inv)
@@ -108,7 +110,7 @@ class InvestigatorWorker:
 
         graph_start = time.monotonic()
         try:
-            await patch_status("investigations", name, {"phase": "InProgress"})
+            await patch_status(INVESTIGATIONS, name, {"phase": InvestigationPhase.IN_PROGRESS})
 
             categories = spec.get("categories") or []
             if not isinstance(categories, list):
@@ -183,7 +185,7 @@ class InvestigatorWorker:
             }
 
             await patch_status(
-                "investigations",
+                INVESTIGATIONS,
                 name,
                 {
                     "result": result,
@@ -227,14 +229,14 @@ class InvestigatorWorker:
             )
             logger.warning("investigation_timed_out", name=name)
             await patch_status(
-                "investigations",
+                INVESTIGATIONS,
                 name,
                 {
                     # AIDEV-NOTE: Timeout/failure paths set an explicit phase
                     # and still persist a structured result so the operator and
                     # downstream readers can distinguish terminal worker errors
                     # from successful result-driven completion.
-                    "phase": "TimedOut",
+                    "phase": InvestigationPhase.TIMED_OUT,
                     "result": {
                         "hypothesis": "",
                         "confidence": 0.0,
@@ -251,10 +253,10 @@ class InvestigatorWorker:
             )
             logger.exception("investigation_failed", name=name)
             await patch_status(
-                "investigations",
+                INVESTIGATIONS,
                 name,
                 {
-                    "phase": "Failed",
+                    "phase": InvestigationPhase.FAILED,
                     "result": {
                         "hypothesis": "",
                         "confidence": 0.0,
