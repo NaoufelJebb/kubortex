@@ -67,6 +67,9 @@ class InvestigatorWorker:
         """Main polling loop — runs until cancelled."""
         logger.info("investigator_worker_started", pod=self._settings.pod_name)
 
+        # Clean stale payloads on startup to prevent unbounded PVC growth
+        self._payload_store.gc()
+
         while True:
             try:
                 await self._poll_and_process()
@@ -274,6 +277,12 @@ class InvestigatorWorker:
 
     def _build_llm(self) -> Any:
         """Construct the LLM client based on settings."""
+        provider = self._settings.llm_provider
+        if provider != "openai":
+            raise ValueError(
+                f"Unsupported llm_provider {provider!r}; only 'openai' is "
+                f"currently implemented"
+            )
         from langchain_openai import ChatOpenAI
 
         return ChatOpenAI(
