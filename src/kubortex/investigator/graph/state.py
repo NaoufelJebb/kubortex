@@ -23,9 +23,6 @@ class InvestigationState(TypedDict):
     # Current iteration count
     iteration: int
 
-    # Context budget remaining (approximate chars)
-    context_budget_remaining: int
-
     # Set of skill names whose full bodies have been injected
     loaded_skills: set[str]
 
@@ -54,3 +51,6 @@ class InvestigationState(TypedDict):
 
     # IDs of injected skill/runbook HumanMessages eligible for eviction
     injected_message_ids: list[str]
+
+    # Raw SkillResult from the most recent invoke node (consumed by summarise)
+    _last_result: Any

@@ -40,8 +40,6 @@ class CapabilityGateway:
         self,
         skill_name: str,
         inp: SkillInput,
-        *,
-        allowed_namespaces: list[str] | None = None,
     ) -> tuple[SkillResult, SkillInvocationRecord]:
         """Execute a skill through the gateway with full audit trail.
 
@@ -52,11 +50,6 @@ class CapabilityGateway:
             return _error_result(f"unknown skill: {skill_name}"), _record(
                 skill_name, 0, 0, f"unknown skill: {skill_name}"
             )
-
-        # Scope enforcement
-        if allowed_namespaces and inp.namespace and inp.namespace not in allowed_namespaces:
-            msg = f"namespace '{inp.namespace}' not in allowed scope"
-            return _error_result(msg), _record(skill_name, 0, 0, msg)
 
         # Rate limit check
         rate_limit = manifest.metadata.get("rateLimit", 20)

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from kubortex.investigator.runbooks.models import RunbookManifest
 from kubortex.investigator.runbooks.registry import RunbookRegistry
 from kubortex.investigator.skills.registry import SkillRegistry
 
@@ -33,7 +32,6 @@ class ContextAssembler:
         self.budget = ContextBudget(max_tokens=max_tokens, model=model)
         self.loaded_skills: set[str] = set()
         self.loaded_runbook: bool = False
-        self._matched_runbook: RunbookManifest | None = None
 
     def build_initial_prompt(
         self,
@@ -84,13 +82,6 @@ class ContextAssembler:
         """Track evidence added to context (Layer 3)."""
         self.budget.add(summary)
 
-    @property
-    def matched_runbook(self) -> RunbookManifest | None:
-        return self._matched_runbook
-
-    @matched_runbook.setter
-    def matched_runbook(self, value: RunbookManifest | None) -> None:
-        self._matched_runbook = value
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +107,15 @@ def _incident_section(ctx: dict[str, Any]) -> str:
         lines.append(f"\n### Signals ({len(signals)})")
         for s in signals[:5]:
             lines.append(f"- [{s.get('severity')}] {s.get('alertname')}: {s.get('summary')}")
+
+    prior = ctx.get("priorAttempts", [])
+    if prior:
+        lines.append(f"\n### Prior Attempts ({len(prior)})")
+        for attempt in prior:
+            hypo = attempt.get("hypothesis", "N/A")
+            reason = attempt.get("failureReason", "unknown")
+            lines.append(f"- Hypothesis: {hypo} — Failed: {reason}")
+
     return "\n".join(lines)
 
 

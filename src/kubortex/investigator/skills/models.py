@@ -25,7 +25,6 @@ class SkillInput(BaseModel):
 
     query: str
     namespace: str = ""
-    resource_type: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
