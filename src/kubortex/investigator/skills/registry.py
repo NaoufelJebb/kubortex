@@ -11,6 +11,8 @@ from pathlib import Path
 import structlog
 import yaml
 
+from kubortex.investigator._frontmatter import split_frontmatter
+
 from .models import SkillManifest
 
 logger = structlog.get_logger(__name__)
@@ -60,7 +62,7 @@ class SkillRegistry:
         if not manifest.body:
             skill_md = Path(manifest.dir_path) / "SKILL.md"
             if skill_md.exists():
-                _, body = _split_frontmatter(skill_md.read_text())
+                _, body = split_frontmatter(skill_md.read_text())
                 manifest.body = body
         return manifest.body
 
@@ -72,18 +74,8 @@ class SkillRegistry:
 def _parse_skill_md(path: Path) -> SkillManifest:
     """Parse a SKILL.md file into a SkillManifest."""
     content = path.read_text()
-    frontmatter_str, _body = _split_frontmatter(content)
+    frontmatter_str, _body = split_frontmatter(content)
     data = yaml.safe_load(frontmatter_str)
     manifest = SkillManifest.model_validate(data)
     manifest.dir_path = str(path.parent)
     return manifest
-
-
-def _split_frontmatter(text: str) -> tuple[str, str]:
-    """Split YAML frontmatter (between --- delimiters) from the body."""
-    if not text.startswith("---"):
-        return "", text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return "", text
-    return parts[1].strip(), parts[2].strip()

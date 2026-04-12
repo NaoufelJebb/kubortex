@@ -11,6 +11,8 @@ from pathlib import Path
 import structlog
 import yaml
 
+from kubortex.investigator._frontmatter import split_frontmatter
+
 from .models import RunbookManifest
 
 logger = structlog.get_logger(__name__)
@@ -53,7 +55,7 @@ class RunbookRegistry:
         if not manifest.body:
             path = Path(manifest.file_path)
             if path.exists():
-                _, body = _split_frontmatter(path.read_text())
+                _, body = split_frontmatter(path.read_text())
                 manifest.body = body
         return manifest.body
 
@@ -69,18 +71,8 @@ class RunbookRegistry:
 def _parse_runbook_md(path: Path) -> RunbookManifest:
     """Parse a runbook markdown file into a RunbookManifest."""
     content = path.read_text()
-    frontmatter_str, _body = _split_frontmatter(content)
+    frontmatter_str, _body = split_frontmatter(content)
     data = yaml.safe_load(frontmatter_str)
     manifest = RunbookManifest.model_validate(data)
     manifest.file_path = str(path)
     return manifest
-
-
-def _split_frontmatter(text: str) -> tuple[str, str]:
-    """Split YAML frontmatter (between --- delimiters) from the body."""
-    if not text.startswith("---"):
-        return "", text
-    parts = text.split("---", 2)
-    if len(parts) < 3:
-        return "", text
-    return parts[1].strip(), parts[2].strip()
