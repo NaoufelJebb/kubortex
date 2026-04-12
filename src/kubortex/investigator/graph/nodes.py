@@ -10,7 +10,8 @@ import re
 from typing import Any
 
 import structlog
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langgraph.graph.message import RemoveMessage
 
 from kubortex.investigator.context.assembler import ContextAssembler
 from kubortex.investigator.context.compression import apply_compression
@@ -124,8 +125,6 @@ async def invoke(
         invocation_record.model_dump(by_alias=True)
     ]
 
-    from langchain_core.messages import ToolMessage
-
     tool_msg = ToolMessage(
         content=result_text,
         tool_call_id=tool_call["id"],
@@ -196,8 +195,6 @@ async def summarise(
         messages=messages,
         injected_message_ids=state.get("injected_message_ids", []),
     )
-
-    from langgraph.graph.message import RemoveMessage
 
     result: dict[str, Any] = {
         "evidence": evidence,

@@ -45,11 +45,6 @@ class InvestigatorWorker:
     def __init__(self, settings: InvestigatorSettings) -> None:
         self._settings = settings
 
-        import sys
-        from pathlib import Path
-        skills_parent = str(Path(settings.skills_dir).parent)
-        if skills_parent not in sys.path:
-            sys.path.insert(0, skills_parent)
         self._skill_registry = SkillRegistry()
         self._skill_registry.load(settings.skills_dir)
 
@@ -61,7 +56,10 @@ class InvestigatorWorker:
         self._payload_store = PayloadStore(settings)
 
         # Long-lived gateway — reset per-investigation invocation counts each run
-        self._gateway = CapabilityGateway(registry=self._skill_registry)
+        self._gateway = CapabilityGateway(
+            registry=self._skill_registry,
+            skills_dir=settings.skills_dir,
+        )
 
     async def run(self) -> None:
         """Main polling loop — runs until cancelled."""

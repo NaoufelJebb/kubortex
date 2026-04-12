@@ -7,7 +7,9 @@ records telemetry, and applies output processing.
 from __future__ import annotations
 
 import importlib
+import sys
 import time
+from pathlib import Path
 
 import structlog
 
@@ -27,10 +29,12 @@ DEFAULT_MAX_OUTPUT_CHARS = 50_000
 class CapabilityGateway:
     """Validates, executes, and audits skill invocations."""
 
-    def __init__(self, registry: SkillRegistry) -> None:
+    def __init__(self, registry: SkillRegistry, skills_dir: str = "") -> None:
         self._registry = registry
+        self._skills_dir = skills_dir
         self._adapters: dict[str, BaseSkill] = {}
         self._invocation_counts: dict[str, int] = {}  # per investigation
+        self._path_injected: bool = False
 
     def reset_counts(self) -> None:
         """Reset per-investigation invocation counts."""
@@ -99,6 +103,14 @@ class CapabilityGateway:
         """Dynamically load the skill adapter from its entrypoint."""
         if manifest.name in self._adapters:
             return self._adapters[manifest.name]
+
+        # Ensure the skills directory parent is on sys.path so that skill
+        # adapter modules can be imported by their entrypoint strings.
+        if not self._path_injected and self._skills_dir:
+            parent = str(Path(self._skills_dir).parent)
+            if parent not in sys.path:
+                sys.path.insert(0, parent)
+            self._path_injected = True
 
         try:
             module_path, func_name = manifest.entrypoint.rsplit(".", 1)
