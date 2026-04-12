@@ -111,7 +111,7 @@ class InvestigatorSettings(SharedSettings):
     llm_timeout_seconds: int = 120
     llm_max_tokens: int = 4096
 
-    # -- Observability data sources ------------------------------------------
+    # -- Observability data sources (consumed by skill adapters, not the worker)
     prometheus_url: str = "http://prometheus.monitoring:9090"
     loki_url: str = "http://loki.monitoring:3100"
 

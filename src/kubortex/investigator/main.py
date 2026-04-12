@@ -11,6 +11,7 @@ import asyncio
 from kubernetes_asyncio import config as k8s_config
 
 from kubortex.shared.config import InvestigatorSettings
+from kubortex.shared.kube_clients import close_kubernetes_clients
 from kubortex.shared.logging import configure_logging
 
 from .worker import InvestigatorWorker
@@ -27,7 +28,10 @@ async def _run() -> None:
 
     settings = InvestigatorSettings()
     worker = InvestigatorWorker(settings)
-    await worker.run()
+    try:
+        await worker.run()
+    finally:
+        await close_kubernetes_clients()
 
 
 def main() -> None:
