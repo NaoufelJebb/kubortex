@@ -11,6 +11,7 @@ import time
 
 import structlog
 
+from kubortex.shared.metrics import SKILL_INVOCATIONS, SKILL_LATENCY
 from kubortex.shared.models.investigation import SkillInvocationRecord
 
 from .base import BaseSkill
@@ -78,6 +79,8 @@ class CapabilityGateway:
             latency = (time.monotonic() - start) * 1000
             msg = f"skill execution error: {exc}"
             logger.exception("skill_error", skill=skill_name)
+            SKILL_INVOCATIONS.labels(skill=skill_name, status="error").inc()
+            SKILL_LATENCY.labels(skill=skill_name).observe(latency / 1000)
             return _error_result(msg), _record(skill_name, latency, 0, msg)
 
         latency = (time.monotonic() - start) * 1000
@@ -88,6 +91,8 @@ class CapabilityGateway:
             result.summary = result.summary[:max_chars] + "\n... [truncated]"
 
         self._invocation_counts[skill_name] = count + 1
+        SKILL_INVOCATIONS.labels(skill=skill_name, status="success").inc()
+        SKILL_LATENCY.labels(skill=skill_name).observe(latency / 1000)
         record = _record(skill_name, latency, result.raw_size)
         logger.info(
             "skill_invoked",

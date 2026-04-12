@@ -11,6 +11,7 @@ from typing import Any
 import structlog
 
 from kubortex.shared.config import InvestigatorSettings
+from kubortex.shared.metrics import DIAGNOSTIC_SCORE_UPDATES
 
 from .store import LearningStore
 
@@ -84,6 +85,7 @@ class StrategyRanker:
         data["skills"] = skills
         data["sampleCount"] = sample_count + 1
         self._store.save(category, target_kind, data)
+        DIAGNOSTIC_SCORE_UPDATES.labels(category=category, target_kind=target_kind).inc()
         logger.info(
             "diagnostic_scores_updated",
             category=category,

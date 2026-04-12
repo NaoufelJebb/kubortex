@@ -8,6 +8,7 @@ back into the Investigation status.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 import structlog
@@ -26,6 +27,11 @@ from kubortex.investigator.skills.models import SkillInput
 from kubortex.investigator.skills.registry import SkillRegistry
 from kubortex.shared.config import InvestigatorSettings
 from kubortex.shared.crds import list_resources, patch_status, try_claim
+from kubortex.shared.metrics import (
+    INVESTIGATION_CLAIMS,
+    INVESTIGATION_CONFIDENCE,
+    INVESTIGATION_DURATION,
+)
 from kubortex.shared.models.investigation import InvestigationResult
 
 logger = structlog.get_logger(__name__)
@@ -86,6 +92,7 @@ class InvestigatorWorker:
         for inv in pending:
             name = inv["metadata"]["name"]
             claimed = await try_claim("investigations", name, self._settings.pod_name)
+            INVESTIGATION_CLAIMS.labels(result="won" if claimed else "lost").inc()
             if claimed:
                 await self._run_investigation(inv)
                 break
@@ -99,6 +106,7 @@ class InvestigatorWorker:
 
         logger.info("investigation_started", name=name, incident=incident_name)
 
+        graph_start = time.monotonic()
         try:
             await patch_status("investigations", name, {"phase": "InProgress"})
 
@@ -201,14 +209,22 @@ class InvestigatorWorker:
             except Exception:
                 logger.exception("feedback_recording_failed", name=name)
 
+            duration = time.monotonic() - graph_start
+            INVESTIGATION_DURATION.labels(category=category, outcome="completed").observe(duration)
+            confidence = result.get("confidence", 0.0)
+            INVESTIGATION_CONFIDENCE.labels(category=category).observe(confidence)
+
             logger.info(
                 "investigation_completed",
                 name=name,
-                confidence=result.get("confidence"),
+                confidence=confidence,
                 escalate=result.get("escalate"),
             )
 
         except TimeoutError:
+            INVESTIGATION_DURATION.labels(category=category, outcome="timed_out").observe(
+                time.monotonic() - graph_start
+            )
             logger.warning("investigation_timed_out", name=name)
             await patch_status(
                 "investigations",
@@ -230,6 +246,9 @@ class InvestigatorWorker:
                 },
             )
         except Exception:
+            INVESTIGATION_DURATION.labels(category=category, outcome="failed").observe(
+                time.monotonic() - graph_start
+            )
             logger.exception("investigation_failed", name=name)
             await patch_status(
                 "investigations",
